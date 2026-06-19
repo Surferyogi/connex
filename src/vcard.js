@@ -75,11 +75,13 @@ function isAppleTouch() {
 }
 
 // One button → open the vCard so you can review, edit, and save it.
-// On iPhone/iPad this opens iOS's native contact card directly (Create New
-// Contact / Add to Existing). On desktop it saves the .vcf, which opens in
-// Contacts when you open the file. Note: a web app cannot write to iOS
-// Contacts silently — opening the card for you to confirm is the closest a
-// PWA can get, and it's intentionally after your confirmation anyway.
+// On iPhone/iPad we navigate the current window straight to the vCard, which
+// makes iOS open its CONTACT PREVIEW (the same view you get when tapping a
+// .vcf in Files). From there: tap the share/actions icon → "Add to Contacts"
+// → review/edit → Add. iOS gives no way to skip that final tap from a web app.
+// (Using target=_blank instead pops a generic share sheet that buries the
+// contact action behind document apps, so we navigate in place.)
+// On desktop we save the .vcf, which opens in Contacts when you open the file.
 // Returns { method: "open" | "download" }.
 export function addToContacts(card) {
   const vcf = buildVCard(card);
@@ -87,21 +89,18 @@ export function addToContacts(card) {
   const blob = new Blob([vcf], { type: "text/vcard;charset=utf-8" });
   const url = URL.createObjectURL(blob);
 
+  if (isAppleTouch()) {
+    window.location.href = url; // iOS opens the contact preview in place
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    return { method: "open" };
+  }
+
   const a = document.createElement("a");
   a.href = url;
-  const onIOS = isAppleTouch();
-  if (onIOS) {
-    // No `download` attribute: let iOS OPEN the card so you can review and
-    // save it, rather than silently storing a file in Downloads.
-    a.target = "_blank";
-    a.rel = "noopener";
-  } else {
-    a.download = filename; // desktop: save the file; opening it adds to Contacts
-  }
+  a.download = filename; // desktop: save the file; opening it adds to Contacts
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
-
-  return { method: onIOS ? "open" : "download" };
+  return { method: "download" };
 }
