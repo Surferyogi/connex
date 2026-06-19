@@ -13,7 +13,7 @@ import {
 import { addToContacts } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:20-00:40";
+const APP_VERSION = "v2026:06:20-01:36";
 
 const BLANK = {
   full_name: "",
@@ -216,7 +216,7 @@ export default function App() {
   function handleAddToContacts(card) {
     const res = addToContacts(card);
     if (res.method === "open")
-      flash("Review the contact, then tap Create New Contact to save it.", 5200);
+      flash("In the contact preview, tap the share icon → Add to Contacts → Add.", 6000);
     else flash("Contact card saved — open the .vcf to add it to Contacts.", 5200);
   }
 
