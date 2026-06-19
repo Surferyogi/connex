@@ -66,30 +66,42 @@ function safeFileName(name) {
   return (name || "contact").replace(/[^\p{L}\p{N}_-]+/gu, "_").slice(0, 40);
 }
 
-// Returns { method: "share" | "download" | "cancelled" }.
-export async function addToContacts(card) {
+function isAppleTouch() {
+  const ua = navigator.userAgent || "";
+  const iOSLike = /iP(hone|ad|od)/.test(ua);
+  // iPadOS reports as a Mac, so detect the touch screen too.
+  const iPadOS = navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1;
+  return iOSLike || iPadOS;
+}
+
+// One button → open the vCard so you can review, edit, and save it.
+// On iPhone/iPad this opens iOS's native contact card directly (Create New
+// Contact / Add to Existing). On desktop it saves the .vcf, which opens in
+// Contacts when you open the file. Note: a web app cannot write to iOS
+// Contacts silently — opening the card for you to confirm is the closest a
+// PWA can get, and it's intentionally after your confirmation anyway.
+// Returns { method: "open" | "download" }.
+export function addToContacts(card) {
   const vcf = buildVCard(card);
   const filename = `${safeFileName(card.full_name)}.vcf`;
-  const file = new File([vcf], filename, { type: "text/vcard" });
-
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: card.full_name || "Contact" });
-      return { method: "share" };
-    } catch (e) {
-      if (e && e.name === "AbortError") return { method: "cancelled" };
-      // otherwise fall through to download
-    }
-  }
-
   const blob = new Blob([vcf], { type: "text/vcard;charset=utf-8" });
   const url = URL.createObjectURL(blob);
+
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename;
+  const onIOS = isAppleTouch();
+  if (onIOS) {
+    // No `download` attribute: let iOS OPEN the card so you can review and
+    // save it, rather than silently storing a file in Downloads.
+    a.target = "_blank";
+    a.rel = "noopener";
+  } else {
+    a.download = filename; // desktop: save the file; opening it adds to Contacts
+  }
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-  return { method: "download" };
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+  return { method: onIOS ? "open" : "download" };
 }
