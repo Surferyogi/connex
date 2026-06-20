@@ -13,7 +13,7 @@ import {
 import { addToContacts } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:20-22:07";
+const APP_VERSION = "v2026:06:20-22:45";
 
 const BLANK = {
   full_name: "",
@@ -526,10 +526,11 @@ function CropView({ src, title, onDone, onCancel }) {
 /* ------------------------------- List ------------------------------------- */
 function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut }) {
   const [activeTag, setActiveTag] = useState(null);
+  const [sort, setSort] = useState("date_desc");
 
-  const filtered = useMemo(() => {
+  const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return cards.filter((c) => {
+    const list = cards.filter((c) => {
       if (activeTag && !(c.tags || []).includes(activeTag)) return false;
       if (!q) return true;
       return [c.full_name, c.company, c.job_title, ...(c.emails || []), ...(c.tags || [])]
@@ -538,7 +539,27 @@ function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut 
         .toLowerCase()
         .includes(q);
     });
-  }, [cards, query, activeTag]);
+
+    const t = (c) => new Date(c.created_at).getTime() || 0;
+    // Unnamed cards always sort to the bottom, regardless of A–Z / Z–A.
+    const byName = (a, b, dir) => {
+      const ax = (a.full_name || "").trim();
+      const bx = (b.full_name || "").trim();
+      if (!ax && !bx) return 0;
+      if (!ax) return 1;
+      if (!bx) return -1;
+      const r = ax.toLowerCase().localeCompare(bx.toLowerCase());
+      return dir === "asc" ? r : -r;
+    };
+    const cmp = {
+      date_desc: (a, b) => t(b) - t(a),
+      date_asc: (a, b) => t(a) - t(b),
+      name_asc: (a, b) => byName(a, b, "asc"),
+      name_desc: (a, b) => byName(a, b, "desc"),
+    }[sort];
+
+    return [...list].sort(cmp);
+  }, [cards, query, activeTag, sort]);
 
   return (
     <>
@@ -562,6 +583,25 @@ function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut 
           />
         )}
 
+        {cards.length > 1 && (
+          <div className="sortbar">
+            <label className="sortbar-label" htmlFor="sortsel">
+              Sort
+            </label>
+            <select
+              id="sortsel"
+              className="sort-select"
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+            >
+              <option value="date_desc">Scanned: latest first</option>
+              <option value="date_asc">Scanned: earliest first</option>
+              <option value="name_asc">Name A → Z</option>
+              <option value="name_desc">Name Z → A</option>
+            </select>
+          </div>
+        )}
+
         {allTags.length > 0 && (
           <div className="tag-filter">
             {allTags.map((t) => (
@@ -582,7 +622,7 @@ function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut 
             <div className="skeleton" />
             <div className="skeleton" />
           </div>
-        ) : filtered.length === 0 ? (
+        ) : visible.length === 0 ? (
           <div className="empty">
             <div className="seal-big" />
             <h2>{cards.length === 0 ? "No cards yet" : "No matches"}</h2>
@@ -594,7 +634,7 @@ function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut 
           </div>
         ) : (
           <div className="card-list">
-            {filtered.map((c) => (
+            {visible.map((c) => (
               <button key={c.id} className="tile" onClick={() => onOpen(c)}>
                 <Thumb card={c} />
                 <div className="tile-body">

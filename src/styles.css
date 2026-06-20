@@ -509,3 +509,20 @@ input, textarea { font-family: inherit; }
   text-align: center; color: rgba(255, 255, 255, 0.7);
   font-size: 12px; padding: 10px 0 calc(12px + var(--safe-bottom));
 }
+
+/* --- sort selector -------------------------------------------------------- */
+.sortbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.sortbar-label {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--slate); flex: none;
+}
+.sort-select {
+  flex: 1; -webkit-appearance: none; appearance: none;
+  border: 1px solid var(--line); background-color: var(--surface);
+  border-radius: 999px; padding: 10px 38px 10px 16px;
+  font-size: 14px; font-weight: 600; color: var(--ink); cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%235C6373' stroke-width='1.6'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 14px center; background-size: 12px;
+}
+.sort-select:focus { outline: none; border-color: var(--brass); }
