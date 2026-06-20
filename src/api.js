@@ -104,8 +104,9 @@ export async function updateCard(id, patch) {
 }
 
 export async function deleteCard(card) {
-  if (card.image_path) {
-    await supabase.storage.from("card-images").remove([card.image_path]);
+  const paths = [card.image_path, card.image_path_back].filter(Boolean);
+  if (paths.length) {
+    await supabase.storage.from("card-images").remove(paths);
   }
   const { error } = await supabase.from("cards").delete().eq("id", card.id);
   if (error) throw error;

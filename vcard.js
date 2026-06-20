@@ -54,10 +54,6 @@ export function buildVCard(card) {
   if (card.website) lines.push(`URL:${esc(card.website)}`);
   if (card.address) lines.push(`ADR;TYPE=WORK:;;${esc(card.address)};;;;`);
 
-  if (Array.isArray(card.tags) && card.tags.length) {
-    lines.push(`CATEGORIES:${card.tags.map(esc).join(",")}`);
-  }
-
   const note = [card.notes, "Scanned with Connex"].filter(Boolean).join("\n");
   lines.push(`NOTE:${esc(note)}`);
   lines.push(`REV:${new Date().toISOString().replace(/\.\d+Z$/, "Z")}`);

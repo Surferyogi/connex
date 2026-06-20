@@ -13,7 +13,7 @@ import {
 import { addToContacts } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:20-17:59";
+const APP_VERSION = "v2026:06:20-01:36";
 
 const BLANK = {
   full_name: "",
@@ -26,7 +26,6 @@ const BLANK = {
   notes: "",
   emails: [],
   phones: [],
-  tags: [],
 };
 
 function fieldsToForm(f = {}) {
@@ -43,7 +42,6 @@ function fieldsToForm(f = {}) {
     phones: Array.isArray(f.phones)
       ? f.phones.map((p) => ({ label: p?.label ?? "", number: p?.number ?? "" }))
       : [],
-    tags: Array.isArray(f.tags) ? f.tags.filter(Boolean) : [],
   };
 }
 
@@ -65,39 +63,7 @@ function formToRecord(form) {
     phones: form.phones
       .filter((p) => (p.number ?? "").trim())
       .map((p) => ({ label: (p.label || "other").trim(), number: p.number.trim() })),
-    tags: Array.from(
-      new Set((form.tags || []).map((t) => t.trim()).filter(Boolean)),
-    ),
   };
-}
-
-// --- crop helpers (no dependencies) ----------------------------------------
-function loadImg(src) {
-  return new Promise((res, rej) => {
-    const i = new Image();
-    i.onload = () => res(i);
-    i.onerror = () => rej(new Error("load failed"));
-    i.src = src;
-  });
-}
-
-async function cropImage(src, r, quality = 0.85) {
-  const img = await loadImg(src);
-  const nW = img.naturalWidth;
-  const nH = img.naturalHeight;
-  const sx = Math.round(r.x1 * nW);
-  const sy = Math.round(r.y1 * nH);
-  const sw = Math.max(1, Math.round((r.x2 - r.x1) * nW));
-  const sh = Math.max(1, Math.round((r.y2 - r.y1) * nH));
-  const canvas = document.createElement("canvas");
-  canvas.width = sw;
-  canvas.height = sh;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-  const dataUrl = canvas.toDataURL("image/jpeg", quality);
-  const base64 = dataUrl.split(",")[1];
-  const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
-  return { blob, dataUrl, base64, mediaType: "image/jpeg", width: sw, height: sh };
 }
 
 export default function App() {
@@ -110,28 +76,19 @@ export default function App() {
   const [loadingCards, setLoadingCards] = useState(false);
   const [query, setQuery] = useState("");
 
-  const [view, setView] = useState("list"); // list | crop | review | detail
-  const [captured, setCaptured] = useState(null); // {front, back, rawFields, model}
-  const [pendingCrop, setPendingCrop] = useState(null); // {img, target}
+  const [view, setView] = useState("list"); // list | review | detail
+  const [captured, setCaptured] = useState(null); // {dataUrl, blob, base64, mediaType, rawFields, model}
   const [form, setForm] = useState(BLANK);
   const [scanning, setScanning] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [current, setCurrent] = useState(null); // card open in detail
   const [editing, setEditing] = useState(false);
-  const [detailBack, setDetailBack] = useState(null); // pending back image in detail
 
   const [toast, setToast] = useState(null);
   const [stamp, setStamp] = useState(false);
 
   const fileRef = useRef(null);
-  const flowRef = useRef("front"); // front | new-back | detail-back
-
-  const allTags = useMemo(() => {
-    const s = new Set();
-    cards.forEach((c) => (c.tags || []).forEach((t) => s.add(t)));
-    return [...s].sort((a, b) => a.localeCompare(b));
-  }, [cards]);
 
   function flash(msg, ms = 3600) {
     setToast(msg);
@@ -165,17 +122,8 @@ export default function App() {
     }
   }
 
-  // --- capture + crop + scan ------------------------------------------------
+  // --- capture + scan -------------------------------------------------------
   function startScan() {
-    flowRef.current = "front";
-    fileRef.current?.click();
-  }
-  function pickBackForReview() {
-    flowRef.current = "new-back";
-    fileRef.current?.click();
-  }
-  function pickBackForDetail() {
-    flowRef.current = "detail-back";
     fileRef.current?.click();
   }
 
@@ -183,67 +131,35 @@ export default function App() {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    let img;
     try {
-      img = await processImage(file);
+      const img = await processImage(file);
+      setCaptured({ ...img, rawFields: null, model: null });
+      setForm(BLANK);
+      setView("review");
+      setScanning(true);
+      try {
+        const { fields, model_used } = await scanCard(img.base64, img.mediaType);
+        setForm(fieldsToForm(fields));
+        setCaptured((c) => ({ ...c, rawFields: fields, model: model_used }));
+      } catch (err) {
+        flash(err.message || "Couldn’t read the card — you can type it in.");
+      } finally {
+        setScanning(false);
+      }
     } catch {
       flash("That image couldn’t be opened.");
-      return;
     }
-    setPendingCrop({ img, target: flowRef.current });
-    setView("crop");
-  }
-
-  async function runOcr(img) {
-    setScanning(true);
-    try {
-      const { fields, model_used } = await scanCard(img.base64, img.mediaType);
-      setForm((f) => ({ ...fieldsToForm(fields), tags: f.tags }));
-      setCaptured((c) => ({ ...c, rawFields: fields, model: model_used }));
-    } catch (err) {
-      flash(err.message || "Couldn’t read the card — you can type it in.");
-    } finally {
-      setScanning(false);
-    }
-  }
-
-  function onCropDone(cropped) {
-    const target = pendingCrop?.target;
-    setPendingCrop(null);
-    if (target === "front") {
-      setCaptured({ front: cropped, back: null, rawFields: null, model: null });
-      setForm({ ...BLANK });
-      setView("review");
-      runOcr(cropped);
-    } else if (target === "new-back") {
-      setCaptured((c) => ({ ...c, back: cropped }));
-      setView("review");
-    } else if (target === "detail-back") {
-      setDetailBack(cropped);
-      setView("detail");
-    }
-  }
-
-  function onCropCancel() {
-    const target = pendingCrop?.target;
-    setPendingCrop(null);
-    if (target === "front") setView("list");
-    else if (target === "new-back") setView("review");
-    else setView("detail");
   }
 
   async function saveCard() {
-    if (!session || !captured?.front) return;
+    if (!session) return;
     setSaving(true);
     try {
-      const frontPath = await uploadImage(session.user.id, captured.front.blob);
-      let backPath = null;
-      if (captured.back) backPath = await uploadImage(session.user.id, captured.back.blob);
+      const path = await uploadImage(session.user.id, captured.blob);
       const rec = {
         ...formToRecord(form),
         user_id: session.user.id,
-        image_path: frontPath,
-        image_path_back: backPath,
+        image_path: path,
         raw_extraction: captured.rawFields,
         model_used: captured.model,
       };
@@ -265,7 +181,6 @@ export default function App() {
   function openDetail(card) {
     setCurrent(card);
     setForm(fieldsToForm(card));
-    setDetailBack(null);
     setEditing(false);
     setView("detail");
   }
@@ -273,14 +188,9 @@ export default function App() {
   async function saveEdits() {
     setSaving(true);
     try {
-      const patch = formToRecord(form);
-      if (detailBack) {
-        patch.image_path_back = await uploadImage(session.user.id, detailBack.blob);
-      }
-      const updated = await updateCard(current.id, patch);
+      const updated = await updateCard(current.id, formToRecord(form));
       setCards((cs) => cs.map((c) => (c.id === updated.id ? updated : c)));
       setCurrent(updated);
-      setDetailBack(null);
       setEditing(false);
       flash("Changes saved.");
     } catch (e) {
@@ -291,7 +201,7 @@ export default function App() {
   }
 
   async function removeCard() {
-    if (!window.confirm("Delete this card and its photos? This can’t be undone.")) return;
+    if (!window.confirm("Delete this card and its photo? This can’t be undone.")) return;
     try {
       await deleteCard(current);
       setCards((cs) => cs.filter((c) => c.id !== current.id));
@@ -331,18 +241,8 @@ export default function App() {
           loading={loadingCards}
           query={query}
           setQuery={setQuery}
-          allTags={allTags}
           onOpen={openDetail}
           onSignOut={() => supabase.auth.signOut()}
-        />
-      )}
-
-      {view === "crop" && pendingCrop && (
-        <CropView
-          src={pendingCrop.img.dataUrl}
-          title={pendingCrop.target === "front" ? "Crop the card" : "Crop the back"}
-          onDone={onCropDone}
-          onCancel={onCropCancel}
         />
       )}
 
@@ -351,13 +251,10 @@ export default function App() {
           captured={captured}
           form={form}
           setForm={setForm}
-          suggestions={allTags}
           scanning={scanning}
           saving={saving}
           onSave={saveCard}
           onRetake={startScan}
-          onAddBack={pickBackForReview}
-          onRemoveBack={() => setCaptured((c) => ({ ...c, back: null }))}
           onCancel={() => {
             setCaptured(null);
             setForm(BLANK);
@@ -371,18 +268,13 @@ export default function App() {
           card={current}
           form={form}
           setForm={setForm}
-          suggestions={allTags}
           editing={editing}
           setEditing={setEditing}
           saving={saving}
-          detailBack={detailBack}
-          onAddBack={pickBackForDetail}
-          onRemovePendingBack={() => setDetailBack(null)}
           onSaveEdits={saveEdits}
           onDelete={removeCard}
           onBack={() => {
             setEditing(false);
-            setDetailBack(null);
             setView("list");
           }}
           onAddToContacts={handleAddToContacts}
@@ -410,135 +302,19 @@ export default function App() {
   );
 }
 
-/* ------------------------------- Crop ------------------------------------- */
-function CropView({ src, title, onDone, onCancel }) {
-  const stageRef = useRef(null);
-  const dragRef = useRef(null);
-  const [rect, setRect] = useState({ x1: 0.06, y1: 0.08, x2: 0.94, y2: 0.92 });
-  const [busy, setBusy] = useState(false);
-
-  const startDrag = (mode) => (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const r = stageRef.current.getBoundingClientRect();
-    dragRef.current = {
-      mode,
-      rect: { ...rect },
-      sx: (e.clientX - r.left) / r.width,
-      sy: (e.clientY - r.top) / r.height,
-    };
-    try {
-      stageRef.current.setPointerCapture(e.pointerId);
-    } catch (_) {}
-  };
-
-  const onMove = (e) => {
-    const d = dragRef.current;
-    if (!d) return;
-    const r = stageRef.current.getBoundingClientRect();
-    const nx = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-    const ny = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
-    const dx = nx - d.sx;
-    const dy = ny - d.sy;
-    const MIN = 0.12;
-    let { x1, y1, x2, y2 } = d.rect;
-    if (d.mode === "move") {
-      const w = x2 - x1;
-      const h = y2 - y1;
-      let a = Math.min(1 - w, Math.max(0, x1 + dx));
-      let b = Math.min(1 - h, Math.max(0, y1 + dy));
-      setRect({ x1: a, y1: b, x2: a + w, y2: b + h });
-      return;
-    }
-    if (d.mode.includes("w")) x1 = Math.min(x2 - MIN, Math.max(0, x1 + dx));
-    if (d.mode.includes("e")) x2 = Math.max(x1 + MIN, Math.min(1, x2 + dx));
-    if (d.mode.includes("n")) y1 = Math.min(y2 - MIN, Math.max(0, y1 + dy));
-    if (d.mode.includes("s")) y2 = Math.max(y1 + MIN, Math.min(1, y2 + dy));
-    setRect({ x1, y1, x2, y2 });
-  };
-
-  const endDrag = (e) => {
-    dragRef.current = null;
-    try {
-      stageRef.current.releasePointerCapture(e.pointerId);
-    } catch (_) {}
-  };
-
-  async function apply(useFull) {
-    setBusy(true);
-    try {
-      const r = useFull ? { x1: 0, y1: 0, x2: 1, y2: 1 } : rect;
-      const out = await cropImage(src, r);
-      onDone(out);
-    } catch {
-      onDone(await cropImage(src, { x1: 0, y1: 0, x2: 1, y2: 1 }));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const maskStyle = {
-    left: `${rect.x1 * 100}%`,
-    top: `${rect.y1 * 100}%`,
-    width: `${(rect.x2 - rect.x1) * 100}%`,
-    height: `${(rect.y2 - rect.y1) * 100}%`,
-  };
-
-  return (
-    <div className="screen">
-      <div className="screen-top">
-        <button className="back" onClick={onCancel}>
-          ‹ Back
-        </button>
-        <h1>{title}</h1>
-      </div>
-      <p className="crop-note">Drag the corners to frame just the card.</p>
-      <div
-        className="crop-stage"
-        ref={stageRef}
-        onPointerMove={onMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-      >
-        <img className="crop-img" src={src} alt="" />
-        <div className="crop-mask crop-grid" style={maskStyle} onPointerDown={startDrag("move")}>
-          <div className="crop-handle" style={{ left: 0, top: 0 }} onPointerDown={startDrag("nw")} />
-          <div className="crop-handle" style={{ left: "100%", top: 0 }} onPointerDown={startDrag("ne")} />
-          <div className="crop-handle" style={{ left: 0, top: "100%" }} onPointerDown={startDrag("sw")} />
-          <div className="crop-handle" style={{ left: "100%", top: "100%" }} onPointerDown={startDrag("se")} />
-        </div>
-      </div>
-      <div className="stack">
-        <button className="btn btn-primary" onClick={() => apply(false)} disabled={busy}>
-          {busy ? <span className="spinner" /> : "Use this crop"}
-        </button>
-        <button className="btn btn-ghost" onClick={() => apply(true)} disabled={busy}>
-          Use full photo
-        </button>
-        <button className="btn-text" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-
 /* ------------------------------- List ------------------------------------- */
-function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut }) {
-  const [activeTag, setActiveTag] = useState(null);
-
+function ListView({ cards, loading, query, setQuery, onOpen, onSignOut }) {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return cards.filter((c) => {
-      if (activeTag && !(c.tags || []).includes(activeTag)) return false;
-      if (!q) return true;
-      return [c.full_name, c.company, c.job_title, ...(c.emails || []), ...(c.tags || [])]
+    if (!q) return cards;
+    return cards.filter((c) =>
+      [c.full_name, c.company, c.job_title, ...(c.emails || [])]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
-        .includes(q);
-    });
-  }, [cards, query, activeTag]);
+        .includes(q),
+    );
+  }, [cards, query]);
 
   return (
     <>
@@ -556,24 +332,10 @@ function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut 
         {cards.length > 0 && (
           <input
             className="search"
-            placeholder="Search name, company, email, tag…"
+            placeholder="Search name, company, email…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-        )}
-
-        {allTags.length > 0 && (
-          <div className="tag-filter">
-            {allTags.map((t) => (
-              <button
-                key={t}
-                className={"chip" + (activeTag === t ? " on" : "")}
-                onClick={() => setActiveTag(activeTag === t ? null : t)}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
         )}
 
         {loading && cards.length === 0 ? (
@@ -589,7 +351,7 @@ function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut 
             <p>
               {cards.length === 0
                 ? "Tap Scan a card to capture your first one."
-                : "Try a different name, company, or tag."}
+                : "Try a different name or company."}
             </p>
           </div>
         ) : (
@@ -602,15 +364,6 @@ function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut 
                   <div className="tile-sub">
                     {[c.job_title, c.company].filter(Boolean).join(" · ") || "—"}
                   </div>
-                  {(c.tags || []).length > 0 && (
-                    <div className="tile-tags">
-                      {c.tags.slice(0, 3).map((t) => (
-                        <span className="tile-tag" key={t}>
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </button>
             ))}
@@ -641,13 +394,10 @@ function ReviewView({
   captured,
   form,
   setForm,
-  suggestions,
   scanning,
   saving,
   onSave,
   onRetake,
-  onAddBack,
-  onRemoveBack,
   onCancel,
 }) {
   return (
@@ -659,32 +409,10 @@ function ReviewView({
         <h1>Review</h1>
       </div>
 
-      <div className="shot-pair">
-        <div className="shot-col">
-          {captured?.front?.dataUrl && (
-            <img className="shot" src={captured.front.dataUrl} alt="Front of card" />
-          )}
-          <div className="shot-cap">Front</div>
+      {captured?.dataUrl && (
+        <div className="shot-wrap">
+          <img className="shot" src={captured.dataUrl} alt="Captured business card" />
         </div>
-        {captured?.back?.dataUrl && (
-          <div className="shot-col">
-            <img className="shot" src={captured.back.dataUrl} alt="Back of card" />
-            <div className="shot-cap">Back</div>
-          </div>
-        )}
-      </div>
-
-      {captured?.back ? (
-        <div className="back-actions">
-          <button onClick={onAddBack}>Retake back</button>
-          <button className="danger" onClick={onRemoveBack}>
-            Remove back
-          </button>
-        </div>
-      ) : (
-        <button className="add-back" onClick={onAddBack}>
-          + Add back of card
-        </button>
       )}
 
       {scanning ? (
@@ -700,7 +428,7 @@ function ReviewView({
         </div>
       )}
 
-      <CardForm form={form} setForm={setForm} suggestions={suggestions} markUndetected />
+      <CardForm form={form} setForm={setForm} markUndetected />
 
       <div className="stack">
         <button className="btn btn-primary" onClick={onSave} disabled={saving || scanning}>
@@ -708,7 +436,7 @@ function ReviewView({
         </button>
         <div className="btn-row">
           <button className="btn btn-ghost" onClick={onRetake} disabled={saving}>
-            Retake front
+            Retake
           </button>
           <button className="btn btn-ghost" onClick={onCancel} disabled={saving}>
             Discard
@@ -724,28 +452,22 @@ function DetailView({
   card,
   form,
   setForm,
-  suggestions,
   editing,
   setEditing,
   saving,
-  detailBack,
-  onAddBack,
-  onRemovePendingBack,
   onSaveEdits,
   onDelete,
   onBack,
   onAddToContacts,
 }) {
-  const [frontUrl, setFrontUrl] = useState(null);
-  const [backUrl, setBackUrl] = useState(null);
+  const [imgUrl, setImgUrl] = useState(null);
   useEffect(() => {
     let on = true;
-    if (card.image_path) signedUrl(card.image_path).then((u) => on && setFrontUrl(u));
-    if (card.image_path_back) signedUrl(card.image_path_back).then((u) => on && setBackUrl(u));
+    if (card.image_path) signedUrl(card.image_path).then((u) => on && setImgUrl(u));
     return () => {
       on = false;
     };
-  }, [card.image_path, card.image_path_back]);
+  }, [card.image_path]);
 
   const rows = [
     ["Name", card.full_name],
@@ -766,45 +488,15 @@ function DetailView({
         <h1>{editing ? "Edit" : "Contact"}</h1>
       </div>
 
-      <div className="shot-pair">
-        {frontUrl && (
-          <div className="shot-col">
-            <img className="shot" src={frontUrl} alt="Front of card" />
-            <div className="shot-cap">Front</div>
-          </div>
-        )}
-        {backUrl && (
-          <div className="shot-col">
-            <img className="shot" src={backUrl} alt="Back of card" />
-            <div className="shot-cap">Back</div>
-          </div>
-        )}
-      </div>
+      {imgUrl && (
+        <div className="shot-wrap">
+          <img className="shot" src={imgUrl} alt="Saved business card" />
+        </div>
+      )}
 
       {editing ? (
         <>
-          <CardForm form={form} setForm={setForm} suggestions={suggestions} />
-
-          {detailBack ? (
-            <div className="shot-pair">
-              <div className="shot-col">
-                <img className="shot" src={detailBack.dataUrl} alt="New back of card" />
-                <div className="shot-cap">New back</div>
-              </div>
-            </div>
-          ) : null}
-          {detailBack ? (
-            <div className="back-actions">
-              <button className="danger" onClick={onRemovePendingBack}>
-                Remove new back
-              </button>
-            </div>
-          ) : (
-            <button className="add-back" onClick={onAddBack}>
-              {card.image_path_back ? "+ Replace back of card" : "+ Add back of card"}
-            </button>
-          )}
-
+          <CardForm form={form} setForm={setForm} />
           <div className="stack">
             <button className="btn btn-primary" onClick={onSaveEdits} disabled={saving}>
               {saving ? <span className="spinner" /> : "Save changes"}
@@ -844,18 +536,6 @@ function DetailView({
               <div className="v">{card.notes}</div>
             </div>
           )}
-          {(card.tags || []).length > 0 && (
-            <div className="detail-field">
-              <div className="k">Tags</div>
-              <div className="chips" style={{ marginTop: 6 }}>
-                {card.tags.map((t) => (
-                  <span className="chip on" key={t}>
-                    {t}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
 
           <div className="detail-meta">
             Saved {new Date(card.created_at).toLocaleDateString()} · you confirm
@@ -881,7 +561,7 @@ function DetailView({
 }
 
 /* --------------------------- Shared form ---------------------------------- */
-function CardForm({ form, setForm, suggestions = [], markUndetected = false }) {
+function CardForm({ form, setForm, markUndetected = false }) {
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const cls = (v) => "field" + (markUndetected && !v ? " undetected" : "");
 
@@ -999,66 +679,6 @@ function CardForm({ form, setForm, suggestions = [], markUndetected = false }) {
         <label>Notes</label>
         <textarea rows={2} value={form.notes} onChange={set("notes")} />
       </div>
-
-      <TagEditor
-        tags={form.tags}
-        setTags={(next) => setForm((f) => ({ ...f, tags: next }))}
-        suggestions={suggestions}
-      />
-    </div>
-  );
-}
-
-/* ------------------------------- Tags ------------------------------------- */
-function TagEditor({ tags, setTags, suggestions }) {
-  const [input, setInput] = useState("");
-  const has = (v) => tags.some((t) => t.toLowerCase() === v.toLowerCase());
-  const add = (raw) => {
-    const v = raw.trim();
-    setInput("");
-    if (!v || has(v)) return;
-    setTags([...tags, v]);
-  };
-  const remove = (i) => setTags(tags.filter((_, j) => j !== i));
-  const sugg = (suggestions || []).filter(
-    (s) => !has(s) && (!input || s.toLowerCase().includes(input.toLowerCase())),
-  );
-
-  return (
-    <div className="field">
-      <label>Tags</label>
-      {tags.length > 0 && (
-        <div className="chips">
-          {tags.map((t, i) => (
-            <span className="chip on" key={i}>
-              {t}
-              <button onClick={() => remove(i)} aria-label="Remove tag">
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      <input
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === ",") {
-            e.preventDefault();
-            add(input);
-          }
-        }}
-        placeholder="Add a tag, then Enter"
-      />
-      {sugg.length > 0 && (
-        <div className="chips suggest">
-          {sugg.slice(0, 12).map((s) => (
-            <button className="chip" key={s} onClick={() => add(s)}>
-              + {s}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

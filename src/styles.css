@@ -390,3 +390,86 @@ input, textarea { font-family: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::after { animation: none !important; transition: none !important; }
 }
+
+/* --- crop stage ----------------------------------------------------------- */
+.crop-stage {
+  position: relative;
+  width: 100%;
+  margin-bottom: 16px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #000;
+  touch-action: none; /* let us handle drags ourselves */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.crop-img { display: block; width: 100%; height: auto; pointer-events: none; }
+.crop-mask {
+  position: absolute;
+  inset: 0;
+  box-shadow: 0 0 0 9999px rgba(21, 24, 31, 0.55);
+  border: 1.5px solid #fff;
+  box-sizing: border-box;
+}
+.crop-grid::before, .crop-grid::after {
+  content: ""; position: absolute; background: rgba(255, 255, 255, 0.35);
+}
+.crop-grid::before { left: 33.33%; right: 33.33%; top: 0; bottom: 0; border-left: 1px solid rgba(255,255,255,.35); border-right: 1px solid rgba(255,255,255,.35); }
+.crop-grid::after { top: 33.33%; bottom: 33.33%; left: 0; right: 0; border-top: 1px solid rgba(255,255,255,.35); border-bottom: 1px solid rgba(255,255,255,.35); }
+.crop-handle {
+  position: absolute;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  transform: translate(-50%, -50%);
+  touch-action: none;
+}
+.crop-note { font-size: 13px; color: var(--slate); margin-bottom: 14px; text-align: center; }
+
+/* --- back-of-card thumbnails in review ------------------------------------ */
+.shot-pair { display: flex; gap: 10px; margin-bottom: 18px; }
+.shot-pair .shot-col { flex: 1; min-width: 0; }
+.shot-pair .shot { margin: 0; }
+.shot-cap { font-size: 11px; color: var(--slate-2); text-align: center; margin-top: 4px; letter-spacing: 0.04em; text-transform: uppercase; }
+.add-back {
+  width: 100%; border: 1px dashed var(--line); border-radius: var(--radius);
+  background: color-mix(in srgb, var(--paper) 60%, var(--surface));
+  color: var(--brass); font-weight: 700; font-size: 14px;
+  padding: 18px; cursor: pointer; margin-bottom: 18px;
+}
+.back-actions { display: flex; gap: 8px; justify-content: center; margin-bottom: 18px; }
+.back-actions button {
+  background: none; border: none; color: var(--slate); font-size: 13px;
+  font-weight: 600; padding: 6px 8px; cursor: pointer;
+}
+.back-actions button.danger { color: var(--danger); }
+
+/* --- tags ----------------------------------------------------------------- */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 8px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); border-radius: 999px; padding: 5px 11px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.chip.on { background: var(--seal); border-color: var(--seal); color: #fff; }
+.chip.on button {
+  background: none; border: none; color: #fff; cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 0 0 0 1px;
+}
+.chips.suggest .chip { color: var(--brass); border-style: dashed; }
+.chips.suggest .chip:active { transform: scale(0.97); }
+
+.tag-filter {
+  display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;
+  margin: -2px 0 14px; -webkit-overflow-scrolling: touch;
+}
+.tag-filter .chip { flex: none; }
+
+.tile-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.tile-tag {
+  font-size: 11px; font-weight: 600; color: var(--brass);
+  border: 1px solid color-mix(in srgb, var(--brass) 35%, var(--line));
+  border-radius: 999px; padding: 1px 8px; background: color-mix(in srgb, var(--brass) 7%, var(--surface));
+}

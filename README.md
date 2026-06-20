@@ -1,158 +1,185 @@
 # Connex — business card scanner (PWA)
 
 Scan a business card with your phone camera, let Claude read the details, store
-the card photo and fields in your own Supabase database (synced across all your
-Apple devices), and add the contact to iOS Contacts after you confirm.
+the card photo and fields in your own Supabase database (synced across your
+Apple devices), and hand the contact off to iOS Contacts after you confirm.
+
+**Live:** https://surferyogi.github.io/connex/
+**Repo:** https://github.com/surferyogi/connex
+**Supabase project ref:** `pvqwpzbjremcyobnsldd`
+**Current version:** `v2026:06:20-01:36`  ·  Last updated: 2026-06-20
 
 Stack: React + Vite (frontend, GitHub Pages) · Supabase (Postgres + Storage +
 Auth + Edge Function) · Claude `claude-sonnet-4-6` for extraction.
 
 ---
 
-## Build status — read this first
+## How it works (the chain)
 
-- Every source file was syntax/JSX-validated with esbuild and passes cleanly.
-- The full production build (`vite build`) was **not** run in the environment it
-  was authored in (the sandbox network couldn't finish installing React/Vite).
-  **Run `npm install && npm run build` on your machine as the real check.**
-- No fabricated values anywhere: any card field Claude can't read is stored as
-  `null`, and the raw model output is kept in `raw_extraction` for audit.
+1. **Capture** — the "Scan a card" button uses the native camera file input
+   (`capture="environment"`), not a live `getUserMedia` stream, because the live
+   camera is unreliable inside an installed iOS PWA.
+2. **Extract** — the image is downscaled in the browser, then sent to the
+   `scan-card` Supabase Edge Function, which calls Claude. The Anthropic API key
+   lives only as a Supabase secret — it never reaches the frontend.
+3. **Review** — extracted fields appear for you to check/edit. Anything Claude
+   couldn't read is left blank (never guessed); the raw model output is stored in
+   `raw_extraction` for audit.
+4. **Save** — fields go to the `cards` table; the photo goes to the private
+   `card-images` bucket. Both are isolated per user by Row Level Security.
+5. **Add to Contacts** — builds a UTF-8 vCard and opens it so iOS shows the
+   contact, after your confirmation. See the iOS note below.
 
----
-
-## What you need
-
-- Node 18+ and npm
-- A Supabase account (a new, dedicated project for this app)
-- An Anthropic API key (stored only as a Supabase secret — never in the frontend)
-- A GitHub repo with Pages enabled (for hosting), plus an iPhone/iPad to install it
-
----
-
-## 1. Create the Supabase project + database
-
-1. Create a **new** Supabase project (Singapore region keeps it near your other
-   apps; pick whatever you prefer).
-2. Open **SQL Editor**, paste the contents of `supabase/schema.sql`, and run it.
-   This creates the `cards` table, the private `card-images` storage bucket, and
-   the Row Level Security policies that keep your data and Sophia's fully
-   separate (each row/object is bound to `auth.uid()`).
-3. In **Authentication → Providers**, make sure **Email** is enabled. Create an
-   account each (e.g. your `koksum@` address and Sophia's gmail) — either by
-   signing up inside the app, or via the Auth dashboard. If you'd rather skip the
-   email-confirmation step, turn off "Confirm email" in Auth settings.
-
-## 2. Deploy the OCR Edge Function (keeps the API key server-side)
-
-Install the Supabase CLI, then from the project root:
-
-```bash
-supabase login
-supabase link --project-ref YOUR_PROJECT_REF
-
-# Secrets live on the server only — never commit these:
-supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
-# optional override (defaults to claude-sonnet-4-6):
-# supabase secrets set CLAUDE_MODEL=claude-sonnet-4-6
-
-# Deploy WITH JWT verification (the default — do NOT pass --no-verify-jwt),
-# so only signed-in users can spend your API budget:
-supabase functions deploy scan-card
-```
-
-## 3. Configure + run the frontend
-
-```bash
-cp .env.example .env
-# edit .env with your project's URL and ANON (public) key from
-# Supabase → Project Settings → API
-npm install
-npm run dev          # local preview (see note on base path below)
-```
-
-The anon key is meant to be public; RLS is what protects your data. The secret
-service-role key and the Anthropic key must never appear in the frontend.
-
-## 4. Deploy to GitHub Pages
-
-1. In `vite.config.js`, set `base` to `"/<your-repo-name>/"` (it's `"/connex/"`
-   by default).
-2. Build and publish:
-
-```bash
-npm run build        # outputs to dist/
-npm run deploy       # publishes dist/ to the gh-pages branch via gh-pages
-```
-
-3. In the repo's **Settings → Pages**, serve from the `gh-pages` branch.
-
-> For local `npm run dev`/`npm run preview` you can temporarily set `base` to
-> `"/"`. Remember to set it back to `"/<repo>/"` before building for Pages.
-
-## 5. Install on your iPhone/iPad
-
-Open the `https://<you>.github.io/<repo>/` URL in **Safari** → Share → **Add to
-Home Screen**. Sign in with the account you created. Data syncs across every
-device signed into the same account.
+Separate accounts for the two of you; each account sees only its own cards,
+synced across every device signed into that account.
 
 ---
 
-## Using it
+## Updating the app (READ THIS — it caused real confusion once)
 
-- **Scan a card** opens the camera (it uses the native camera picker, which is
-  the reliable path on iOS). If the camera ever misbehaves in the installed app,
-  open the same URL in Safari instead — a known WebKit quirk affects camera
-  access in installed PWAs.
-- **Review** shows exactly what was read. Blank = not detected; nothing is
-  guessed. Edit anything, then **Save card** (you'll see the seal stamp).
-- **Add to Contacts** builds a UTF-8 vCard (so Japanese/Korean/Chinese names
-  stay intact) and opens the share sheet → choose **Contacts**, then **Save**.
-  If it downloads instead, open the `.vcf`, tap the share/actions icon, and
-  choose Contacts — iOS hides the save action behind that icon.
+**main vs gh-pages:**
+- `main` branch = source code (a backup). Editing it changes nothing live.
+- `gh-pages` branch = the built site your devices actually load.
+- **Only `npm run deploy` rebuilds and publishes.** A web commit on GitHub does
+  NOT update the live app on its own.
+
+**Edit in ONE place.** Editing the same files both on the Mac and on the GitHub
+website creates a split where `git pull` refuses to merge ("local changes would
+be overwritten"). Pick one workflow and stick to it:
+
+Preferred — always edit on the Mac:
+```bash
+cd ~/Downloads/connex
+# ...make edits...
+git add -A && git commit -m "what changed"
+git push          # backs up source to main
+npm run deploy    # rebuilds + publishes to gh-pages (this is the one that matters)
+```
+
+If you ever DID edit on the GitHub website, sync the Mac before building:
+```bash
+git pull          # bring web edits down first
+npm run deploy
+```
+If `git pull` reports a conflict because both sides changed, and the Mac copy is
+the version you want to keep:
+```bash
+git add -A && git commit -m "local latest"
+git pull --no-rebase -X ours --no-edit
+git push
+```
+
+**After deploying:** on the phone, close and reopen the app. Confirm the footer
+shows the new version. If a device shows a stale build, open the URL once in
+Safari to refresh, or bump the `CACHE` name in `public/sw.js`.
+
+**Version stamp convention:** every time `src/App.jsx` changes, update
+`APP_VERSION` at the top using `vYYYY:MM:DD-HH:MM` in Asia/Tokyo time.
+
+---
+
+## The iOS "Add to Contacts" reality (verified, not a bug)
+
+A web app on iOS **cannot** write to Contacts silently or skip the final
+confirmation tap — confirmed on Apple's developer forum. The most a PWA can do
+is open the vCard so iOS shows the contact, then you tap to add it.
+
+Current behaviour (v2026:06:20-01:36): on iPhone/iPad the button navigates the
+window to the vCard so iOS opens its **contact preview**. From there:
+**tap the share/actions icon → Add to Contacts → review/edit → Add.**
+
+That last tap cannot be removed. If a future iOS version shows a share sheet or a
+blank page instead of the preview, the rock-solid fallback is: **Save to Files →
+open the .vcf from Files → Add to Contacts.** On desktop, the button downloads
+the `.vcf`; double-click it and Contacts opens with an Add prompt.
+
+Names are emitted as UTF-8 vCard 3.0 so Japanese/Korean/Chinese and accented
+names survive. The card photo is intentionally not embedded as the contact's
+avatar (a card scan isn't a portrait); it stays in the app.
+
+---
+
+## First-time setup (already done — here for rebuilds / a second project)
+
+### Supabase
+1. New project → run `supabase/schema.sql` in the SQL Editor (creates `cards`,
+   the `card-images` bucket, and RLS policies).
+2. Authentication → enable Email; create the two accounts.
+3. Deploy the function (Supabase CLI needs **Node 20+**):
+   ```bash
+   npx supabase login
+   npx supabase link --project-ref pvqwpzbjremcyobnsldd   # bare ref, not the URL
+   npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...  # server-side only
+   npx supabase functions deploy scan-card                # JWT verification ON (default)
+   ```
+
+### Frontend
+1. `cp .env.example .env`, then set `VITE_SUPABASE_URL` and
+   `VITE_SUPABASE_ANON_KEY` (Project Settings → API). The anon key is public and
+   safe in the frontend; it's gated by RLS. `.env` is read at **build time**, so
+   rebuild after any change.
+2. `npm install` then `npm run dev` to preview locally.
+
+### GitHub Pages
+1. `base` in `vite.config.js` must equal `/connex/` (matches the repo name) or
+   you get a blank screen.
+2. `npm run deploy` → Settings → Pages → Source: Deploy from a branch →
+   Branch: `gh-pages` / root → Save.
+
+### iPhone/iPad
+Open the live URL in Safari → Share → Add to Home Screen.
+
+---
 
 ## Costs
 
-Extraction calls Claude per scan. As of the build date, `claude-sonnet-4-6` is
-priced at $3 / $15 per million input/output tokens (source: Anthropic docs —
-verify current pricing at https://www.anthropic.com/pricing before relying on
-per-scan estimates). A downscaled card image plus the JSON response is a small
-number of tokens per scan.
+Each scan calls Claude on your Anthropic account. `claude-sonnet-4-6` was
+$3 / $15 per million input/output tokens at build time — **verify current rates
+at https://www.anthropic.com/pricing** before relying on estimates. A downscaled
+card image plus a small JSON response is a low token count per scan. Set a spend
+limit in the Anthropic Console if you want a guardrail.
 
-## Security checklist
+## Security
 
-- Anon key in `.env`/frontend: fine (public, gated by RLS).
-- `ANTHROPIC_API_KEY`: Supabase secret only. If it's ever exposed, rotate it
-  immediately and re-run `supabase secrets set`.
-- Edge Function deployed with JWT verification on, so anonymous callers can't
-  burn your API quota.
+- Anon key in the frontend: fine (public, RLS-protected).
+- `ANTHROPIC_API_KEY`: Supabase secret only — never in the repo or frontend.
+  Rotate immediately if ever exposed.
+- `scan-card` is deployed with JWT verification on, so only signed-in users can
+  spend your API budget.
 
-## Maintenance
+---
 
-- Version stamp lives in `src/App.jsx` as `APP_VERSION`. Update it on every edit
-  to App.jsx using the `vYYYY:MM:DD-HH:MM` (Asia/Tokyo) convention. Current:
-  `v2026:06:19-11:14`.
-- After redeploying, clear the old service-worker cache if a device shows a
-  stale build (or bump the `CACHE` name in `public/sw.js`).
+## Changelog
+
+- **v2026:06:20-01:36** — iOS Contacts: navigate in place so iOS opens the
+  contact preview (replaces the share-sheet attempt, which buried the contact
+  action behind document apps).
+- **v2026:06:20-00:40** — First attempt at opening the vCard directly on iOS
+  (used `target="_blank"`; produced a share sheet — superseded).
+- **v2026:06:19-11:14** — Initial build and first successful deploy.
+
+---
 
 ## File map
 
 ```
 connex/
   index.html                       app shell, PWA + iOS meta, fonts
-  vite.config.js                   base path for GitHub Pages
+  vite.config.js                   base path for GitHub Pages (/connex/)
   package.json                     scripts: dev / build / preview / deploy
   .env.example                     frontend Supabase config template
+  .gitignore                       node_modules, dist, .env
   public/
     manifest.webmanifest           PWA manifest
-    sw.js                          minimal offline app-shell cache
+    sw.js                          minimal offline app-shell cache (bump CACHE to bust)
     icon-192/512, maskable, apple-touch-icon
   src/
     main.jsx                       entry + service worker registration
-    App.jsx                        all screens + logic (version stamp here)
+    App.jsx                        all screens + logic (APP_VERSION lives here)
     styles.css                     ink/paper/seal design system
     supabaseClient.js              Supabase client from env
     api.js                         image processing, scan, CRUD, storage
-    vcard.js                       UTF-8 vCard + Contacts hand-off
+    vcard.js                       UTF-8 vCard + iOS Contacts hand-off
   supabase/
     schema.sql                     tables, RLS, storage bucket + policies
     functions/scan-card/index.ts   OCR via Claude (key server-side)

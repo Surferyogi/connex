@@ -21,6 +21,9 @@ create table if not exists public.cards (
   address         text,
   notes           text,
 
+  -- Free-form labels the user assigns (e.g. "client", "tokyo", "supplier").
+  tags            text[]  not null default '{}',
+
   -- Audit / honesty: the full raw structured result returned by the model,
   -- so you can always see exactly what was detected vs. edited by hand.
   raw_extraction  jsonb,
@@ -28,6 +31,7 @@ create table if not exists public.cards (
 
   -- Path (not URL) of the stored card photo inside the 'card-images' bucket.
   image_path      text,
+  image_path_back text,            -- optional photo of the back of the card
 
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
@@ -54,6 +58,9 @@ create policy "cards_delete_own" on public.cards
 
 create index if not exists cards_user_created_idx
   on public.cards (user_id, created_at desc);
+
+create index if not exists cards_tags_idx
+  on public.cards using gin (tags);
 
 -- keep updated_at honest
 create or replace function public.touch_updated_at()
