@@ -533,3 +533,17 @@ input, textarea { font-family: inherit; }
   font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--slate); margin-bottom: 8px;
 }
+
+/* --- per-photo retake / re-crop rows -------------------------------------- */
+.photo-row { margin-bottom: 12px; }
+.photo-row-label {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--slate-2);
+}
+.photo-actions { display: flex; gap: 8px; margin-top: 6px; }
+.photo-act {
+  flex: 1; border: 1px solid var(--line); background: var(--surface);
+  border-radius: 11px; padding: 11px; font-size: 14px; font-weight: 600;
+  color: var(--ink); cursor: pointer;
+}
+.photo-act:active { transform: scale(0.98); }

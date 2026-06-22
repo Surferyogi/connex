@@ -13,7 +13,7 @@ import {
 import { addToContacts } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:22-17:30";
+const APP_VERSION = "v2026:06:22-17:49";
 
 const BLANK = {
   full_name: "",
@@ -78,6 +78,20 @@ function loadImg(src) {
     i.onload = () => res(i);
     i.onerror = () => rej(new Error("load failed"));
     i.src = src;
+  });
+}
+
+const FULL_RECT = { x1: 0, y1: 0, x2: 1, y2: 1 };
+
+async function urlToDataUrl(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("fetch failed");
+  const blob = await res.blob();
+  return await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error("read failed"));
+    r.readAsDataURL(blob);
   });
 }
 
@@ -182,6 +196,26 @@ export default function App() {
   function pickBackForDetail() {
     flowRef.current = "detail-back";
     fileRef.current?.click();
+  }
+  async function recropFront(url) {
+    if (!url) return;
+    try {
+      const dataUrl = await urlToDataUrl(url);
+      setPendingCrop({ img: { dataUrl }, target: "detail-front", initialRect: FULL_RECT });
+      setView("crop");
+    } catch {
+      flash("Couldn’t load that photo to re-crop — try Retake instead.");
+    }
+  }
+  async function recropBack(url) {
+    if (!url) return;
+    try {
+      const dataUrl = await urlToDataUrl(url);
+      setPendingCrop({ img: { dataUrl }, target: "detail-back", initialRect: FULL_RECT });
+      setView("crop");
+    } catch {
+      flash("Couldn’t load that photo to re-crop — try Retake instead.");
+    }
   }
 
   async function onPick(e) {
@@ -362,7 +396,8 @@ export default function App() {
       {view === "crop" && pendingCrop && (
         <CropView
           src={pendingCrop.img.dataUrl}
-          title={pendingCrop.target === "front" ? "Crop the card" : "Crop the back"}
+          title={pendingCrop.target === "front" ? "Crop the card" : "Crop the photo"}
+          initialRect={pendingCrop.initialRect}
           onDone={onCropDone}
           onCancel={onCropCancel}
         />
@@ -401,6 +436,8 @@ export default function App() {
           detailFront={detailFront}
           onRetakeFront={pickFrontForDetail}
           onRemovePendingFront={() => setDetailFront(null)}
+          onRecropFront={recropFront}
+          onRecropBack={recropBack}
           onAddBack={pickBackForDetail}
           onRemovePendingBack={() => setDetailBack(null)}
           onSaveEdits={saveEdits}
@@ -437,10 +474,10 @@ export default function App() {
 }
 
 /* ------------------------------- Crop ------------------------------------- */
-function CropView({ src, title, onDone, onCancel }) {
+function CropView({ src, title, initialRect, onDone, onCancel }) {
   const stageRef = useRef(null);
   const dragRef = useRef(null);
-  const [rect, setRect] = useState({ x1: 0.06, y1: 0.08, x2: 0.94, y2: 0.92 });
+  const [rect, setRect] = useState(initialRect || { x1: 0.06, y1: 0.08, x2: 0.94, y2: 0.92 });
   const [busy, setBusy] = useState(false);
 
   const startDrag = (mode) => (e) => {
@@ -798,6 +835,8 @@ function DetailView({
   detailFront,
   onRetakeFront,
   onRemovePendingFront,
+  onRecropFront,
+  onRecropBack,
   onAddBack,
   onRemovePendingBack,
   onSaveEdits,
@@ -863,43 +902,67 @@ function DetailView({
           <div className="photos-edit">
             <div className="photos-edit-label">Photos</div>
 
-            {detailFront && (
-              <div className="shot-pair">
-                <div className="shot-col">
-                  <img className="shot" src={detailFront.dataUrl} alt="New front of card" />
-                  <div className="shot-cap">New front</div>
+            {detailFront ? (
+              <>
+                <div className="shot-pair">
+                  <div className="shot-col">
+                    <img className="shot" src={detailFront.dataUrl} alt="New front of card" />
+                    <div className="shot-cap">New front</div>
+                  </div>
+                </div>
+                <div className="back-actions">
+                  <button className="danger" onClick={onRemovePendingFront}>
+                    Undo new front
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="photo-row">
+                <span className="photo-row-label">Front</span>
+                <div className="photo-actions">
+                  <button className="photo-act" onClick={onRetakeFront}>
+                    ↻ Retake
+                  </button>
+                  {frontUrl && (
+                    <button className="photo-act" onClick={() => onRecropFront(frontUrl)}>
+                      ✂ Re-crop
+                    </button>
+                  )}
                 </div>
               </div>
-            )}
-            {detailFront ? (
-              <div className="back-actions">
-                <button className="danger" onClick={onRemovePendingFront}>
-                  Undo new front
-                </button>
-              </div>
-            ) : (
-              <button className="add-back" onClick={onRetakeFront}>
-                ↻ Retake front photo
-              </button>
             )}
 
-            {detailBack && (
-              <div className="shot-pair">
-                <div className="shot-col">
-                  <img className="shot" src={detailBack.dataUrl} alt="New back of card" />
-                  <div className="shot-cap">New back</div>
-                </div>
-              </div>
-            )}
             {detailBack ? (
-              <div className="back-actions">
-                <button className="danger" onClick={onRemovePendingBack}>
-                  Undo new back
-                </button>
+              <>
+                <div className="shot-pair">
+                  <div className="shot-col">
+                    <img className="shot" src={detailBack.dataUrl} alt="New back of card" />
+                    <div className="shot-cap">New back</div>
+                  </div>
+                </div>
+                <div className="back-actions">
+                  <button className="danger" onClick={onRemovePendingBack}>
+                    Undo new back
+                  </button>
+                </div>
+              </>
+            ) : card.image_path_back ? (
+              <div className="photo-row">
+                <span className="photo-row-label">Back</span>
+                <div className="photo-actions">
+                  <button className="photo-act" onClick={onAddBack}>
+                    ↻ Retake
+                  </button>
+                  {backUrl && (
+                    <button className="photo-act" onClick={() => onRecropBack(backUrl)}>
+                      ✂ Re-crop
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
               <button className="add-back" onClick={onAddBack}>
-                {card.image_path_back ? "↻ Retake back photo" : "+ Add back of card"}
+                + Add back of card
               </button>
             )}
           </div>
