@@ -526,3 +526,10 @@ input, textarea { font-family: inherit; }
   background-repeat: no-repeat; background-position: right 14px center; background-size: 12px;
 }
 .sort-select:focus { outline: none; border-color: var(--brass); }
+
+/* --- photo management in detail edit -------------------------------------- */
+.photos-edit { margin-top: 18px; }
+.photos-edit-label {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--slate); margin-bottom: 8px;
+}
