@@ -13,7 +13,7 @@ import {
 import { addToContacts } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:20-22:45";
+const APP_VERSION = "v2026:06:22-17:30";
 
 const BLANK = {
   full_name: "",
@@ -120,12 +120,13 @@ export default function App() {
   const [current, setCurrent] = useState(null); // card open in detail
   const [editing, setEditing] = useState(false);
   const [detailBack, setDetailBack] = useState(null); // pending back image in detail
+  const [detailFront, setDetailFront] = useState(null); // pending front image in detail
 
   const [toast, setToast] = useState(null);
   const [stamp, setStamp] = useState(false);
 
   const fileRef = useRef(null);
-  const flowRef = useRef("front"); // front | new-back | detail-back
+  const flowRef = useRef("front"); // front | new-back | detail-front | detail-back
 
   const allTags = useMemo(() => {
     const s = new Set();
@@ -174,6 +175,10 @@ export default function App() {
     flowRef.current = "new-back";
     fileRef.current?.click();
   }
+  function pickFrontForDetail() {
+    flowRef.current = "detail-front";
+    fileRef.current?.click();
+  }
   function pickBackForDetail() {
     flowRef.current = "detail-back";
     fileRef.current?.click();
@@ -218,6 +223,9 @@ export default function App() {
     } else if (target === "new-back") {
       setCaptured((c) => ({ ...c, back: cropped }));
       setView("review");
+    } else if (target === "detail-front") {
+      setDetailFront(cropped);
+      setView("detail");
     } else if (target === "detail-back") {
       setDetailBack(cropped);
       setView("detail");
@@ -266,6 +274,7 @@ export default function App() {
     setCurrent(card);
     setForm(fieldsToForm(card));
     setDetailBack(null);
+    setDetailFront(null);
     setEditing(false);
     setView("detail");
   }
@@ -274,15 +283,28 @@ export default function App() {
     setSaving(true);
     try {
       const patch = formToRecord(form);
+      const orphans = [];
+      if (detailFront) {
+        patch.image_path = await uploadImage(session.user.id, detailFront.blob);
+        if (current.image_path) orphans.push(current.image_path);
+      }
       if (detailBack) {
         patch.image_path_back = await uploadImage(session.user.id, detailBack.blob);
+        if (current.image_path_back) orphans.push(current.image_path_back);
       }
       const updated = await updateCard(current.id, patch);
       setCards((cs) => cs.map((c) => (c.id === updated.id ? updated : c)));
       setCurrent(updated);
       setDetailBack(null);
+      setDetailFront(null);
       setEditing(false);
       flash("Changes saved.");
+      // Best-effort: remove the now-replaced photos so storage doesn't accrue orphans.
+      if (orphans.length) {
+        try {
+          await supabase.storage.from("card-images").remove(orphans);
+        } catch (_) {}
+      }
     } catch (e) {
       flash(e.message || "Couldn’t save changes.");
     } finally {
@@ -376,6 +398,9 @@ export default function App() {
           setEditing={setEditing}
           saving={saving}
           detailBack={detailBack}
+          detailFront={detailFront}
+          onRetakeFront={pickFrontForDetail}
+          onRemovePendingFront={() => setDetailFront(null)}
           onAddBack={pickBackForDetail}
           onRemovePendingBack={() => setDetailBack(null)}
           onSaveEdits={saveEdits}
@@ -383,6 +408,7 @@ export default function App() {
           onBack={() => {
             setEditing(false);
             setDetailBack(null);
+            setDetailFront(null);
             setView("list");
           }}
           onAddToContacts={handleAddToContacts}
@@ -769,6 +795,9 @@ function DetailView({
   setEditing,
   saving,
   detailBack,
+  detailFront,
+  onRetakeFront,
+  onRemovePendingFront,
   onAddBack,
   onRemovePendingBack,
   onSaveEdits,
@@ -831,25 +860,49 @@ function DetailView({
         <>
           <CardForm form={form} setForm={setForm} suggestions={suggestions} />
 
-          {detailBack ? (
-            <div className="shot-pair">
-              <div className="shot-col">
-                <img className="shot" src={detailBack.dataUrl} alt="New back of card" />
-                <div className="shot-cap">New back</div>
+          <div className="photos-edit">
+            <div className="photos-edit-label">Photos</div>
+
+            {detailFront && (
+              <div className="shot-pair">
+                <div className="shot-col">
+                  <img className="shot" src={detailFront.dataUrl} alt="New front of card" />
+                  <div className="shot-cap">New front</div>
+                </div>
               </div>
-            </div>
-          ) : null}
-          {detailBack ? (
-            <div className="back-actions">
-              <button className="danger" onClick={onRemovePendingBack}>
-                Remove new back
+            )}
+            {detailFront ? (
+              <div className="back-actions">
+                <button className="danger" onClick={onRemovePendingFront}>
+                  Undo new front
+                </button>
+              </div>
+            ) : (
+              <button className="add-back" onClick={onRetakeFront}>
+                ↻ Retake front photo
               </button>
-            </div>
-          ) : (
-            <button className="add-back" onClick={onAddBack}>
-              {card.image_path_back ? "+ Replace back of card" : "+ Add back of card"}
-            </button>
-          )}
+            )}
+
+            {detailBack && (
+              <div className="shot-pair">
+                <div className="shot-col">
+                  <img className="shot" src={detailBack.dataUrl} alt="New back of card" />
+                  <div className="shot-cap">New back</div>
+                </div>
+              </div>
+            )}
+            {detailBack ? (
+              <div className="back-actions">
+                <button className="danger" onClick={onRemovePendingBack}>
+                  Undo new back
+                </button>
+              </div>
+            ) : (
+              <button className="add-back" onClick={onAddBack}>
+                {card.image_path_back ? "↻ Retake back photo" : "+ Add back of card"}
+              </button>
+            )}
+          </div>
 
           <div className="stack">
             <button className="btn btn-primary" onClick={onSaveEdits} disabled={saving}>
