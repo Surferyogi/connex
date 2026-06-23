@@ -13,7 +13,7 @@ import {
 import { addToContacts } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:23-21:25";
+const APP_VERSION = "v2026:06:23-22:18";
 
 const BLANK = {
   full_name: "",
@@ -95,7 +95,65 @@ async function urlToDataUrl(url) {
   });
 }
 
-async function cropImage(src, r, quality = 0.85) {
+// Mild auto brightness/contrast for freshly captured photos. Luminance-based
+// levels (uniform across R/G/B so hue is preserved), with percentile clipping,
+// a capped gain to avoid amplifying noise, and a blend so it nudges rather than
+// slams. Only applied to fresh camera captures — never on re-crop (which would
+// double-apply and drift). Skips no-ops on already well-exposed shots.
+function autoTone(ctx, w, h) {
+  const STRENGTH = 0.85; // 0..1 blend toward the toned result
+  const CLIP = 0.005; // ignore darkest/brightest 0.5% when picking black/white
+  const MAX_GAIN = 2.6; // cap contrast amplification
+  let data;
+  try {
+    data = ctx.getImageData(0, 0, w, h);
+  } catch {
+    return; // tainted canvas or unavailable — leave the image untouched
+  }
+  const px = data.data;
+  const n = px.length / 4;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < px.length; i += 4) {
+    const l = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) | 0;
+    hist[l]++;
+  }
+  const clip = n * CLIP;
+  let lo = 0;
+  let hi = 255;
+  let acc = 0;
+  for (let v = 0; v < 256; v++) {
+    acc += hist[v];
+    if (acc > clip) {
+      lo = v;
+      break;
+    }
+  }
+  acc = 0;
+  for (let v = 255; v >= 0; v--) {
+    acc += hist[v];
+    if (acc > clip) {
+      hi = v;
+      break;
+    }
+  }
+  if (hi - lo < 8) return; // degenerate range — leave alone
+  let scale = 255 / (hi - lo);
+  if (scale > MAX_GAIN) scale = MAX_GAIN;
+  if (scale <= 1.02 && lo < 4) return; // already well-exposed
+  const lut = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++) {
+    const mapped = (v - lo) * scale;
+    lut[v] = v + (mapped - v) * STRENGTH;
+  }
+  for (let i = 0; i < px.length; i += 4) {
+    px[i] = lut[px[i]];
+    px[i + 1] = lut[px[i + 1]];
+    px[i + 2] = lut[px[i + 2]];
+  }
+  ctx.putImageData(data, 0, 0);
+}
+
+async function cropImage(src, r, quality = 0.85, enhance = false) {
   const img = await loadImg(src);
   const nW = img.naturalWidth;
   const nH = img.naturalHeight;
@@ -108,10 +166,138 @@ async function cropImage(src, r, quality = 0.85) {
   canvas.height = sh;
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+  if (enhance) autoTone(ctx, sw, sh);
   const dataUrl = canvas.toDataURL("image/jpeg", quality);
   const base64 = dataUrl.split(",")[1];
   const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
   return { blob, dataUrl, base64, mediaType: "image/jpeg", width: sw, height: sh };
+}
+
+// Solve the projective transform mapping dst(x,y) -> src(u,v) from 4 point
+// pairs. Returns 8 coefficients h0..h7 (with h8 fixed at 1). Plain Gaussian
+// elimination on an 8x8 system — no external library needed.
+function solveHomography(dst, src) {
+  const A = [];
+  const b = [];
+  for (let i = 0; i < 4; i++) {
+    const { x, y } = dst[i];
+    const u = src[i].x;
+    const v = src[i].y;
+    A.push([x, y, 1, 0, 0, 0, -x * u, -y * u]);
+    b.push(u);
+    A.push([0, 0, 0, x, y, 1, -x * v, -y * v]);
+    b.push(v);
+  }
+  for (let col = 0; col < 8; col++) {
+    let piv = col;
+    for (let r = col + 1; r < 8; r++) {
+      if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+    }
+    if (piv !== col) {
+      const tA = A[col];
+      A[col] = A[piv];
+      A[piv] = tA;
+      const tb = b[col];
+      b[col] = b[piv];
+      b[piv] = tb;
+    }
+    const d = A[col][col] || 1e-9;
+    for (let r = 0; r < 8; r++) {
+      if (r === col) continue;
+      const f = A[r][col] / d;
+      if (!f) continue;
+      for (let c = col; c < 8; c++) A[r][c] -= f * A[col][c];
+      b[r] -= f * b[col];
+    }
+  }
+  const h = new Array(8);
+  for (let i = 0; i < 8; i++) h[i] = b[i] / (A[i][i] || 1e-9);
+  return h;
+}
+
+// Perspective-flatten the quadrilateral (4 normalized corners, order
+// TL,TR,BR,BL) into a straight rectangle. Pure canvas + bilinear sampling.
+// Falls back to a bounding-box crop if source pixels can't be read.
+async function warpImage(src, quad, enhance = false, quality = 0.85) {
+  const img = await loadImg(src);
+  const nW = img.naturalWidth;
+  const nH = img.naturalHeight;
+  const sp = quad.map((p) => ({ x: p.x * nW, y: p.y * nH }));
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  let W = Math.max(1, Math.round(Math.max(dist(sp[0], sp[1]), dist(sp[3], sp[2]))));
+  let H = Math.max(1, Math.round(Math.max(dist(sp[0], sp[3]), dist(sp[1], sp[2]))));
+  const CAP = 1600;
+  const mx = Math.max(W, H);
+  if (mx > CAP) {
+    const k = CAP / mx;
+    W = Math.max(1, Math.round(W * k));
+    H = Math.max(1, Math.round(H * k));
+  }
+  const sc = document.createElement("canvas");
+  sc.width = nW;
+  sc.height = nH;
+  const sctx = sc.getContext("2d");
+  sctx.drawImage(img, 0, 0);
+  let sdata;
+  try {
+    sdata = sctx.getImageData(0, 0, nW, nH);
+  } catch {
+    const xs = quad.map((p) => p.x);
+    const ys = quad.map((p) => p.y);
+    return cropImage(
+      src,
+      { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) },
+      quality,
+      enhance,
+    );
+  }
+  const sPx = sdata.data;
+  const dst = [
+    { x: 0, y: 0 },
+    { x: W, y: 0 },
+    { x: W, y: H },
+    { x: 0, y: H },
+  ];
+  const h = solveHomography(dst, sp);
+  const out = document.createElement("canvas");
+  out.width = W;
+  out.height = H;
+  const octx = out.getContext("2d");
+  const odata = octx.createImageData(W, H);
+  const oPx = odata.data;
+  const clamp = (v, hi) => (v < 0 ? 0 : v > hi ? hi : v);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const denom = h[6] * x + h[7] * y + 1;
+      const u = (h[0] * x + h[1] * y + h[2]) / denom;
+      const v = (h[3] * x + h[4] * y + h[5]) / denom;
+      const u0 = Math.floor(u);
+      const v0 = Math.floor(v);
+      const fu = u - u0;
+      const fv = v - v0;
+      const x0 = clamp(u0, nW - 1);
+      const x1 = clamp(u0 + 1, nW - 1);
+      const y0 = clamp(v0, nH - 1);
+      const y1 = clamp(v0 + 1, nH - 1);
+      const i00 = (y0 * nW + x0) * 4;
+      const i10 = (y0 * nW + x1) * 4;
+      const i01 = (y1 * nW + x0) * 4;
+      const i11 = (y1 * nW + x1) * 4;
+      const o = (y * W + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const top = sPx[i00 + c] + (sPx[i10 + c] - sPx[i00 + c]) * fu;
+        const bot = sPx[i01 + c] + (sPx[i11 + c] - sPx[i01 + c]) * fu;
+        oPx[o + c] = top + (bot - top) * fv;
+      }
+      oPx[o + 3] = 255;
+    }
+  }
+  octx.putImageData(odata, 0, 0);
+  if (enhance) autoTone(octx, W, H);
+  const dataUrl = out.toDataURL("image/jpeg", quality);
+  const base64 = dataUrl.split(",")[1];
+  const blob = await new Promise((res) => out.toBlob(res, "image/jpeg", quality));
+  return { blob, dataUrl, base64, mediaType: "image/jpeg", width: W, height: H };
 }
 
 export default function App() {
@@ -201,7 +387,7 @@ export default function App() {
     if (!url) return;
     try {
       const dataUrl = await urlToDataUrl(url);
-      setPendingCrop({ img: { dataUrl }, target: "detail-front", initialRect: FULL_RECT });
+      setPendingCrop({ img: { dataUrl }, target: "detail-front", initialRect: FULL_RECT, enhance: false });
       setView("crop");
     } catch {
       flash("Couldn’t load that photo to re-crop — try Retake instead.");
@@ -211,7 +397,7 @@ export default function App() {
     if (!url) return;
     try {
       const dataUrl = await urlToDataUrl(url);
-      setPendingCrop({ img: { dataUrl }, target: "detail-back", initialRect: FULL_RECT });
+      setPendingCrop({ img: { dataUrl }, target: "detail-back", initialRect: FULL_RECT, enhance: false });
       setView("crop");
     } catch {
       flash("Couldn’t load that photo to re-crop — try Retake instead.");
@@ -229,7 +415,7 @@ export default function App() {
       flash("That image couldn’t be opened.");
       return;
     }
-    setPendingCrop({ img, target: flowRef.current });
+    setPendingCrop({ img, target: flowRef.current, enhance: true });
     setView("crop");
   }
 
@@ -456,6 +642,7 @@ export default function App() {
           src={pendingCrop.img.dataUrl}
           title={pendingCrop.target === "front" ? "Crop the card" : "Crop the photo"}
           initialRect={pendingCrop.initialRect}
+          enhance={pendingCrop.enhance}
           onDone={onCropDone}
           onCancel={onCropCancel}
         />
@@ -532,11 +719,31 @@ export default function App() {
 }
 
 /* ------------------------------- Crop ------------------------------------- */
-function CropView({ src, title, initialRect, onDone, onCancel }) {
+function CropView({ src, title, initialRect, enhance, onDone, onCancel }) {
   const stageRef = useRef(null);
   const dragRef = useRef(null);
+  const cornerRef = useRef(null);
   const [rect, setRect] = useState(initialRect || { x1: 0.06, y1: 0.08, x2: 0.94, y2: 0.92 });
+  const [mode, setMode] = useState("crop"); // crop | straighten
+  const [quad, setQuad] = useState(() => {
+    const b = initialRect || { x1: 0.08, y1: 0.1, x2: 0.92, y2: 0.9 };
+    return [
+      { x: b.x1, y: b.y1 }, // TL
+      { x: b.x2, y: b.y1 }, // TR
+      { x: b.x2, y: b.y2 }, // BR
+      { x: b.x1, y: b.y2 }, // BL
+    ];
+  });
   const [busy, setBusy] = useState(false);
+
+  const startCorner = (i) => (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    cornerRef.current = i;
+    try {
+      stageRef.current.setPointerCapture(e.pointerId);
+    } catch (_) {}
+  };
 
   const startDrag = (mode) => (e) => {
     e.preventDefault();
@@ -554,6 +761,14 @@ function CropView({ src, title, initialRect, onDone, onCancel }) {
   };
 
   const onMove = (e) => {
+    if (cornerRef.current !== null) {
+      const r = stageRef.current.getBoundingClientRect();
+      const nx = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+      const ny = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+      const idx = cornerRef.current;
+      setQuad((q) => q.map((p, k) => (k === idx ? { x: nx, y: ny } : p)));
+      return;
+    }
     const d = dragRef.current;
     if (!d) return;
     const r = stageRef.current.getBoundingClientRect();
@@ -580,6 +795,7 @@ function CropView({ src, title, initialRect, onDone, onCancel }) {
 
   const endDrag = (e) => {
     dragRef.current = null;
+    cornerRef.current = null;
     try {
       stageRef.current.releasePointerCapture(e.pointerId);
     } catch (_) {}
@@ -588,11 +804,14 @@ function CropView({ src, title, initialRect, onDone, onCancel }) {
   async function apply(useFull) {
     setBusy(true);
     try {
-      const r = useFull ? { x1: 0, y1: 0, x2: 1, y2: 1 } : rect;
-      const out = await cropImage(src, r);
-      onDone(out);
+      if (mode === "straighten") {
+        onDone(await warpImage(src, quad, enhance));
+      } else {
+        const r = useFull ? { x1: 0, y1: 0, x2: 1, y2: 1 } : rect;
+        onDone(await cropImage(src, r, 0.85, enhance));
+      }
     } catch {
-      onDone(await cropImage(src, { x1: 0, y1: 0, x2: 1, y2: 1 }));
+      onDone(await cropImage(src, { x1: 0, y1: 0, x2: 1, y2: 1 }, 0.85, enhance));
     } finally {
       setBusy(false);
     }
@@ -613,7 +832,28 @@ function CropView({ src, title, initialRect, onDone, onCancel }) {
         </button>
         <h1>{title}</h1>
       </div>
-      <p className="crop-note">Drag the corners to frame just the card.</p>
+
+      <div className="crop-mode">
+        <button
+          className={"crop-mode-btn" + (mode === "crop" ? " on" : "")}
+          onClick={() => setMode("crop")}
+        >
+          Crop
+        </button>
+        <button
+          className={"crop-mode-btn" + (mode === "straighten" ? " on" : "")}
+          onClick={() => setMode("straighten")}
+        >
+          Straighten
+        </button>
+      </div>
+
+      <p className="crop-note">
+        {mode === "straighten"
+          ? "Drag a dot onto each corner of the card."
+          : "Drag the corners to frame just the card."}
+      </p>
+
       <div
         className="crop-stage"
         ref={stageRef}
@@ -622,20 +862,52 @@ function CropView({ src, title, initialRect, onDone, onCancel }) {
         onPointerCancel={endDrag}
       >
         <img className="crop-img" src={src} alt="" />
-        <div className="crop-mask crop-grid" style={maskStyle} onPointerDown={startDrag("move")}>
-          <div className="crop-handle" style={{ left: 0, top: 0 }} onPointerDown={startDrag("nw")} />
-          <div className="crop-handle" style={{ left: "100%", top: 0 }} onPointerDown={startDrag("ne")} />
-          <div className="crop-handle" style={{ left: 0, top: "100%" }} onPointerDown={startDrag("sw")} />
-          <div className="crop-handle" style={{ left: "100%", top: "100%" }} onPointerDown={startDrag("se")} />
-        </div>
+
+        {mode === "crop" && (
+          <div className="crop-mask crop-grid" style={maskStyle} onPointerDown={startDrag("move")}>
+            <div className="crop-handle" style={{ left: 0, top: 0 }} onPointerDown={startDrag("nw")} />
+            <div className="crop-handle" style={{ left: "100%", top: 0 }} onPointerDown={startDrag("ne")} />
+            <div className="crop-handle" style={{ left: 0, top: "100%" }} onPointerDown={startDrag("sw")} />
+            <div className="crop-handle" style={{ left: "100%", top: "100%" }} onPointerDown={startDrag("se")} />
+          </div>
+        )}
+
+        {mode === "straighten" && (
+          <>
+            <svg className="quad-overlay" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polygon
+                className="quad-poly"
+                vectorEffect="non-scaling-stroke"
+                points={quad.map((p) => `${p.x * 100},${p.y * 100}`).join(" ")}
+              />
+            </svg>
+            {quad.map((p, i) => (
+              <div
+                key={i}
+                className="quad-handle"
+                style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
+                onPointerDown={startCorner(i)}
+              />
+            ))}
+          </>
+        )}
       </div>
+
       <div className="stack">
         <button className="btn btn-primary" onClick={() => apply(false)} disabled={busy}>
-          {busy ? <span className="spinner" /> : "Use this crop"}
+          {busy ? (
+            <span className="spinner" />
+          ) : mode === "straighten" ? (
+            "Straighten & use"
+          ) : (
+            "Use this crop"
+          )}
         </button>
-        <button className="btn btn-ghost" onClick={() => apply(true)} disabled={busy}>
-          Use full photo
-        </button>
+        {mode === "crop" && (
+          <button className="btn btn-ghost" onClick={() => apply(true)} disabled={busy}>
+            Use full photo
+          </button>
+        )}
         <button className="btn-text" onClick={onCancel}>
           Cancel
         </button>
