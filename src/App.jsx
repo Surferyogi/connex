@@ -13,7 +13,7 @@ import {
 import { addToContacts } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:23-09:52";
+const APP_VERSION = "v2026:06:23-21:25";
 
 const BLANK = {
   full_name: "",
@@ -696,12 +696,23 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
 
       <div className="content">
         {cards.length > 0 && (
-          <input
-            className="search"
-            placeholder="Search name, company, email, tag…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+          <div className="search-wrap">
+            <input
+              className="search"
+              placeholder="Search name, company, email, tag…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            {query && (
+              <button
+                className="search-clear"
+                aria-label="Clear search"
+                onClick={() => setQuery("")}
+              >
+                ×
+              </button>
+            )}
+          </div>
         )}
 
         {cards.length > 1 && (
@@ -774,7 +785,7 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
                   </div>
                   {(c.tags || []).length > 0 && (
                     <div className="tile-tags">
-                      {c.tags.slice(0, 3).map((t) => (
+                      {c.tags.map((t) => (
                         <span className="tile-tag" key={t}>
                           {t}
                         </span>

@@ -116,6 +116,28 @@ input, textarea { font-family: inherit; }
   box-shadow: var(--shadow-sm);
   margin-bottom: 16px;
 }
+.search-wrap { position: relative; }
+.search-wrap .search { margin-bottom: 0; padding-right: 44px; }
+.search-wrap { margin-bottom: 16px; }
+.search-clear {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--slate);
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.search-clear:active { transform: translateY(-50%) scale(0.92); }
 .search::placeholder { color: var(--slate-2); }
 .search:focus { outline: none; border-color: var(--brass); }
 
@@ -462,8 +484,8 @@ input, textarea { font-family: inherit; }
 .chips.suggest .chip:active { transform: scale(0.97); }
 
 .tag-filter {
-  display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;
-  margin: -2px 0 14px; -webkit-overflow-scrolling: touch;
+  display: flex; gap: 8px; flex-wrap: wrap; padding-bottom: 4px;
+  margin: -2px 0 14px;
 }
 .tag-filter .chip { flex: none; }
 
