@@ -13,7 +13,7 @@ import {
 import { addToContacts } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:22-17:49";
+const APP_VERSION = "v2026:06:23-09:52";
 
 const BLANK = {
   full_name: "",
@@ -366,6 +366,54 @@ export default function App() {
     else flash("Contact card saved — open the .vcf to add it to Contacts.", 5200);
   }
 
+  // --- tag management (propagates across every card) ------------------------
+  async function renameTag(oldName, newName) {
+    const n = (newName || "").trim();
+    if (!n) return;
+    const lower = oldName.toLowerCase();
+    if (n.toLowerCase() === lower) return; // same name (ignoring case change handled below)
+    const affected = cards.filter((c) =>
+      (c.tags || []).some((t) => t.toLowerCase() === lower),
+    );
+    const remap = (tags) =>
+      Array.from(new Set((tags || []).map((t) => (t.toLowerCase() === lower ? n : t))));
+    try {
+      for (const c of affected) {
+        await updateCard(c.id, { tags: remap(c.tags) });
+      }
+      setCards((cs) =>
+        cs.map((c) =>
+          (c.tags || []).some((t) => t.toLowerCase() === lower)
+            ? { ...c, tags: remap(c.tags) }
+            : c,
+        ),
+      );
+      flash(`Renamed to “${n}” on ${affected.length} card${affected.length === 1 ? "" : "s"}.`);
+    } catch (e) {
+      flash(e.message || "Couldn’t rename the tag.");
+      refresh();
+    }
+  }
+
+  async function deleteTag(name) {
+    if (!window.confirm(`Remove the tag “${name}” from all cards?`)) return;
+    const lower = name.toLowerCase();
+    const affected = cards.filter((c) =>
+      (c.tags || []).some((t) => t.toLowerCase() === lower),
+    );
+    const strip = (tags) => (tags || []).filter((t) => t.toLowerCase() !== lower);
+    try {
+      for (const c of affected) {
+        await updateCard(c.id, { tags: strip(c.tags) });
+      }
+      setCards((cs) => cs.map((c) => ({ ...c, tags: strip(c.tags) })));
+      flash(`Removed “${name}” from ${affected.length} card${affected.length === 1 ? "" : "s"}.`);
+    } catch (e) {
+      flash(e.message || "Couldn’t remove the tag.");
+      refresh();
+    }
+  }
+
   // --- render ---------------------------------------------------------------
   if (!authReady) return <CenterLoad />;
   if (!session) return <AuthView flash={flash} />;
@@ -388,8 +436,18 @@ export default function App() {
           query={query}
           setQuery={setQuery}
           allTags={allTags}
+          onManageTags={() => setView("tags")}
           onOpen={openDetail}
           onSignOut={() => supabase.auth.signOut()}
+        />
+      )}
+
+      {view === "tags" && (
+        <ManageTagsView
+          allTags={allTags}
+          onRename={renameTag}
+          onDelete={deleteTag}
+          onBack={() => setView("list")}
         />
       )}
 
@@ -587,7 +645,7 @@ function CropView({ src, title, initialRect, onDone, onCancel }) {
 }
 
 /* ------------------------------- List ------------------------------------- */
-function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut }) {
+function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOpen, onSignOut }) {
   const [activeTag, setActiveTag] = useState(null);
   const [sort, setSort] = useState("date_desc");
 
@@ -666,6 +724,15 @@ function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut 
         )}
 
         {allTags.length > 0 && (
+          <div className="tag-filter-head">
+            <span className="tag-filter-title">Tags</span>
+            <button className="link-btn" onClick={onManageTags}>
+              Edit tags
+            </button>
+          </div>
+        )}
+
+        {allTags.length > 0 && (
           <div className="tag-filter">
             {allTags.map((t) => (
               <button
@@ -722,6 +789,68 @@ function ListView({ cards, loading, query, setQuery, allTags, onOpen, onSignOut 
         <div className="foot">Connex {APP_VERSION}</div>
       </div>
     </>
+  );
+}
+
+/* --------------------------- Manage tags ---------------------------------- */
+function ManageTagsView({ allTags, onRename, onDelete, onBack }) {
+  return (
+    <div className="screen">
+      <div className="screen-top">
+        <button className="back" onClick={onBack}>
+          ‹ Back
+        </button>
+        <h1>Manage tags</h1>
+      </div>
+      {allTags.length === 0 ? (
+        <p className="tags-hint">No tags yet. Add tags to a card to see them here.</p>
+      ) : (
+        <>
+          <p className="tags-hint">
+            Rename a tag to update it on every card that uses it. Renaming into an
+            existing tag merges them.
+          </p>
+          <div className="taglist">
+            {allTags.map((t) => (
+              <TagRow key={t} name={t} onRename={onRename} onDelete={onDelete} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TagRow({ name, onRename, onDelete }) {
+  const [val, setVal] = useState(name);
+  const [busy, setBusy] = useState(false);
+  const changed = val.trim() && val.trim() !== name;
+  return (
+    <div className="tagrow">
+      <input
+        className="tagrow-input"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        spellCheck={false}
+      />
+      {changed ? (
+        <button
+          className="tagrow-save"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            await onRename(name, val);
+            setBusy(false);
+          }}
+        >
+          {busy ? <span className="spinner" /> : "Save"}
+        </button>
+      ) : (
+        <button className="tagrow-del" onClick={() => onDelete(name)}>
+          Delete
+        </button>
+      )}
+    </div>
   );
 }
 
