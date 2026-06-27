@@ -622,3 +622,67 @@ input, textarea { font-family: inherit; }
   transform: translate(-50%, -50%); touch-action: none; cursor: grab;
   box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
 }
+
+/* --- version on top + collapsible tag filter ------------------------------ */
+.brand { display: flex; flex-direction: column; gap: 1px; }
+.ver { font-size: 11px; color: var(--slate-2); letter-spacing: 0.02em; }
+.tag-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: none; border: none; padding: 2px 0; cursor: pointer;
+}
+.tag-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: var(--seal); color: #fff; font-size: 11px; font-weight: 700;
+}
+.tag-caret { font-size: 10px; color: var(--slate); }
+.tag-head-actions { display: flex; align-items: center; gap: 14px; }
+
+/* --- filtered card count at top of list ----------------------------------- */
+.list-count {
+  font-size: 13px; font-weight: 700; color: var(--slate);
+  letter-spacing: 0.02em; margin: 0 2px 12px;
+}
+
+/* --- list top row (count + export) + export sheet ------------------------- */
+.list-top { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 12px; }
+.list-top .list-count { margin: 0; }
+
+.sheet-backdrop {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(21, 24, 31, 0.45);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.sheet {
+  width: 100%; max-width: 520px; background: var(--paper);
+  border-radius: 18px 18px 0 0;
+  padding: 18px 18px calc(18px + env(safe-area-inset-bottom));
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.25);
+  animation: sheet-up 0.18s ease-out;
+}
+@keyframes sheet-up { from { transform: translateY(16px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+.sheet-title { font-weight: 800; font-size: 16px; margin-bottom: 14px; color: var(--ink); }
+.sheet-scope { display: flex; gap: 8px; margin-bottom: 14px; }
+.sheet-scope button {
+  flex: 1; border: 1px solid var(--line); background: var(--surface); color: var(--slate);
+  border-radius: 999px; padding: 9px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.sheet-scope button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.sheet-opt {
+  display: flex; align-items: center; justify-content: space-between; width: 100%;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  border-radius: 12px; padding: 14px 16px; font-size: 15px; font-weight: 700;
+  cursor: pointer; margin-bottom: 8px;
+}
+.sheet-opt:active { transform: scale(0.99); }
+.sheet-opt:disabled { opacity: 0.5; }
+.sheet-opt .ext { color: var(--slate-2); font-size: 12px; font-weight: 600; }
+.sheet-cancel {
+  width: 100%; border: none; background: none; color: var(--slate);
+  font-size: 15px; font-weight: 700; padding: 12px; cursor: pointer; margin-top: 4px;
+}
+
+/* --- dock: Import + Scan side by side -------------------------------------- */
+.dock { display: flex; gap: 10px; }
+.dock-scan { flex: 1; }
+.dock-import { flex: 0 0 auto; }

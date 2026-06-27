@@ -10,10 +10,10 @@ import {
   uploadImage,
   signedUrl,
 } from "./api.js";
-import { addToContacts } from "./vcard.js";
+import { addToContacts, buildVCard } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:27-08:01";
+const APP_VERSION = "v2026:06:28-07:55";
 
 const BLANK = {
   full_name: "",
@@ -300,6 +300,35 @@ async function warpImage(src, quad, enhance = false, quality = 0.85) {
   return { blob, dataUrl, base64, mediaType: "image/jpeg", width: W, height: H };
 }
 
+// Flag likely duplicates before inserting a new card. Matches on any shared
+// email, any shared phone (compared by digits only), or identical name plus
+// identical company. Returns the existing cards that look like matches.
+function normName(s) {
+  return (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+function phoneDigits(s) {
+  return (s || "").replace(/\D+/g, "");
+}
+function findDuplicates(cand, cards) {
+  const cName = normName(cand.full_name);
+  const cCompany = normName(cand.company);
+  const cEmails = new Set((cand.emails || []).map((e) => (e || "").trim().toLowerCase()).filter(Boolean));
+  const cPhones = new Set(
+    (cand.phones || []).map((p) => phoneDigits(p?.number)).filter((d) => d.length >= 7),
+  );
+  return cards.filter((c) => {
+    const emails = (c.emails || []).map((e) => (e || "").trim().toLowerCase());
+    if (emails.some((e) => e && cEmails.has(e))) return true;
+    const phones = (c.phones || []).map((p) => phoneDigits(p?.number)).filter((d) => d.length >= 7);
+    if (phones.some((d) => cPhones.has(d))) return true;
+    if (cName && normName(c.full_name) === cName) {
+      if (cCompany && normName(c.company) === cCompany) return true;
+      if (!cCompany && !normName(c.company)) return true; // same name, neither has a company
+    }
+    return false;
+  });
+}
+
 export default function App() {
   if (!isConfigured) return <ConfigWarn />;
 
@@ -326,6 +355,7 @@ export default function App() {
   const [stamp, setStamp] = useState(false);
 
   const fileRef = useRef(null);
+  const importRef = useRef(null);
   const flowRef = useRef("front"); // front | new-back | detail-front | detail-back
 
   const allTags = useMemo(() => {
@@ -370,6 +400,10 @@ export default function App() {
   function startScan() {
     flowRef.current = "front";
     fileRef.current?.click();
+  }
+  function startImport() {
+    flowRef.current = "front";
+    importRef.current?.click();
   }
   function pickBackForReview() {
     flowRef.current = "new-back";
@@ -462,6 +496,17 @@ export default function App() {
 
   async function saveCard() {
     if (!session || !captured?.front) return;
+    const candidate = formToRecord(form);
+    const dups = findDuplicates(candidate, cards);
+    if (dups.length) {
+      const label = (d) => d.full_name || d.company || "an existing card";
+      const names = dups.slice(0, 2).map(label).join(", ");
+      const more = dups.length > 2 ? ` and ${dups.length - 2} more` : "";
+      const ok = window.confirm(
+        `Possible duplicate of ${names}${more}. Add this card anyway?`,
+      );
+      if (!ok) return;
+    }
     setSaving(true);
     try {
       const frontPath = await uploadImage(session.user.id, captured.front.blob);
@@ -614,6 +659,13 @@ export default function App() {
         hidden
         onChange={onPick}
       />
+      <input
+        ref={importRef}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={onPick}
+      />
 
       {view === "list" && (
         <ListView
@@ -625,6 +677,7 @@ export default function App() {
           onManageTags={() => setView("tags")}
           onOpen={openDetail}
           onSignOut={() => supabase.auth.signOut()}
+          flash={flash}
         />
       )}
 
@@ -699,7 +752,10 @@ export default function App() {
 
       {view === "list" && (
         <div className="dock">
-          <button className="btn btn-primary" onClick={startScan}>
+          <button className="btn btn-ghost dock-import" onClick={startImport}>
+            Import
+          </button>
+          <button className="btn btn-primary dock-scan" onClick={startScan}>
             <span className="seal-mark" style={{ borderColor: "#fff" }} />
             Scan a card
           </button>
@@ -917,10 +973,82 @@ function CropView({ src, title, initialRect, enhance, onDone, onCancel }) {
 }
 
 /* ------------------------------- List ------------------------------------- */
-function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOpen, onSignOut }) {
+/* ------------------------------- Export ----------------------------------- */
+const EXPORT_COLS = [
+  "Name",
+  "Reading",
+  "Title",
+  "Department",
+  "Company",
+  "Emails",
+  "Phones",
+  "Website",
+  "Address",
+  "Tags",
+  "Notes",
+  "Saved",
+];
+
+function cardToRow(c) {
+  return {
+    Name: c.full_name || "",
+    Reading: c.name_phonetic || "",
+    Title: c.job_title || "",
+    Department: c.department || "",
+    Company: c.company || "",
+    Emails: (c.emails || []).filter(Boolean).join("; "),
+    Phones: (c.phones || [])
+      .map((p) => [p?.label, p?.number].filter(Boolean).join(": "))
+      .filter(Boolean)
+      .join("; "),
+    Website: c.website || "",
+    Address: c.address || "",
+    Tags: (c.tags || []).join(", "),
+    Notes: c.notes || "",
+    Saved: c.created_at ? new Date(c.created_at).toLocaleDateString() : "",
+  };
+}
+
+function csvCell(v) {
+  const s = String(v ?? "");
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function rowsToCSV(rows) {
+  const lines = [EXPORT_COLS.join(",")];
+  for (const r of rows) lines.push(EXPORT_COLS.map((k) => csvCell(r[k])).join(","));
+  return "\uFEFF" + lines.join("\r\n"); // BOM so Excel reads UTF-8 (CJK) correctly
+}
+
+// Hand a file to the OS: native share sheet where available (iOS → Save to
+// Files / AirDrop / Mail), otherwise a normal download (desktop browsers).
+async function saveFile(filename, blob) {
+  try {
+    const file = new File([blob], filename, { type: blob.type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: filename });
+      return; // shared or cancelled — do not also download
+    }
+  } catch (_) {
+    return; // share dialog dismissed/failed — stop here, don't double up
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOpen, onSignOut, flash }) {
   const [activeTags, setActiveTags] = useState([]);
   const [showTags, setShowTags] = useState(false);
   const [sort, setSort] = useState("date_desc");
+  const [exporting, setExporting] = useState(false);
+  const [exportScope, setExportScope] = useState("filter"); // filter | all
+  const [exportBusy, setExportBusy] = useState(false);
 
   const toggleTag = (t) =>
     setActiveTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -974,6 +1102,65 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
     return [...list].sort(cmp);
   }, [cards, query, activeTags, sort]);
 
+  async function doExport(format) {
+    const list = exportScope === "all" ? cards : visible;
+    if (!list.length) {
+      flash("No cards to export.");
+      return;
+    }
+    setExportBusy(true);
+    try {
+      const base = `connex-cards-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`;
+      if (format === "csv") {
+        await saveFile(
+          `${base}.csv`,
+          new Blob([rowsToCSV(list.map(cardToRow))], { type: "text/csv;charset=utf-8" }),
+        );
+      } else if (format === "vcf") {
+        await saveFile(
+          `${base}.vcf`,
+          new Blob([list.map(buildVCard).join("\r\n")], { type: "text/vcard;charset=utf-8" }),
+        );
+      } else if (format === "xlsx") {
+        const XLSX = await import("xlsx");
+        const ws = XLSX.utils.json_to_sheet(list.map(cardToRow), { header: EXPORT_COLS });
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Cards");
+        const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+        await saveFile(
+          `${base}.xlsx`,
+          new Blob([buf], {
+            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          }),
+        );
+      } else if (format === "pdf") {
+        const { jsPDF } = await import("jspdf");
+        const autoTable = (await import("jspdf-autotable")).default;
+        const doc = new jsPDF({ orientation: "landscape" });
+        const cols = ["Name", "Title", "Company", "Emails", "Phones", "Tags"];
+        const body = list.map((c) => {
+          const r = cardToRow(c);
+          return cols.map((k) => r[k]);
+        });
+        doc.setFontSize(13);
+        doc.text(`Connex — ${list.length} card${list.length === 1 ? "" : "s"}`, 14, 14);
+        autoTable(doc, {
+          head: [cols],
+          body,
+          startY: 20,
+          styles: { fontSize: 8, cellWidth: "wrap", overflow: "linebreak" },
+          headStyles: { fillColor: [200, 69, 45] },
+        });
+        await saveFile(`${base}.pdf`, doc.output("blob"));
+      }
+      setExporting(false);
+    } catch (e) {
+      flash(e.message || "Export failed.");
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   return (
     <>
       <header className="header">
@@ -990,6 +1177,19 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
       </header>
 
       <div className="content">
+        {cards.length > 0 && (
+          <div className="list-top">
+            <div className="list-count">
+              {visible.length === cards.length
+                ? `${cards.length} card${cards.length === 1 ? "" : "s"}`
+                : `${visible.length} of ${cards.length} cards`}
+            </div>
+            <button className="link-btn" onClick={() => setExporting(true)}>
+              Export
+            </button>
+          </div>
+        )}
+
         {cards.length > 0 && (
           <div className="search-wrap">
             <input
@@ -1075,7 +1275,7 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
             <h2>{cards.length === 0 ? "No cards yet" : "No matches"}</h2>
             <p>
               {cards.length === 0
-                ? "Tap Scan a card to capture your first one."
+                ? "Tap Scan a card to capture one, or Import to add a photo you already have."
                 : "Try a different name, company, or tag."}
             </p>
           </div>
@@ -1104,6 +1304,55 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
           </div>
         )}
       </div>
+
+      {exporting && (
+        <div className="sheet-backdrop" onClick={() => !exportBusy && setExporting(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-title">
+              Export {(exportScope === "all" ? cards.length : visible.length)} card
+              {(exportScope === "all" ? cards.length : visible.length) === 1 ? "" : "s"}
+            </div>
+
+            {visible.length !== cards.length && (
+              <div className="sheet-scope">
+                <button
+                  className={"" + (exportScope === "filter" ? "on" : "")}
+                  onClick={() => setExportScope("filter")}
+                >
+                  This filter ({visible.length})
+                </button>
+                <button
+                  className={"" + (exportScope === "all" ? "on" : "")}
+                  onClick={() => setExportScope("all")}
+                >
+                  All ({cards.length})
+                </button>
+              </div>
+            )}
+
+            {[
+              ["csv", "CSV", ".csv — Excel, Numbers, Sheets"],
+              ["xlsx", "Excel", ".xlsx — native spreadsheet"],
+              ["pdf", "PDF", ".pdf — printable list"],
+              ["vcf", "vCard", ".vcf — import to Contacts"],
+            ].map(([fmt, name, desc]) => (
+              <button
+                key={fmt}
+                className="sheet-opt"
+                disabled={exportBusy}
+                onClick={() => doExport(fmt)}
+              >
+                <span>{name}</span>
+                <span className="ext">{desc}</span>
+              </button>
+            ))}
+
+            <button className="sheet-cancel" disabled={exportBusy} onClick={() => setExporting(false)}>
+              {exportBusy ? "Preparing your file…" : "Cancel"}
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }
