@@ -13,7 +13,7 @@ import {
 import { addToContacts } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:23-22:18";
+const APP_VERSION = "v2026:06:27-08:01";
 
 const BLANK = {
   full_name: "",
@@ -918,15 +918,35 @@ function CropView({ src, title, initialRect, enhance, onDone, onCancel }) {
 
 /* ------------------------------- List ------------------------------------- */
 function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOpen, onSignOut }) {
-  const [activeTag, setActiveTag] = useState(null);
+  const [activeTags, setActiveTags] = useState([]);
+  const [showTags, setShowTags] = useState(false);
   const [sort, setSort] = useState("date_desc");
+
+  const toggleTag = (t) =>
+    setActiveTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  const clearTags = () => setActiveTags([]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = cards.filter((c) => {
-      if (activeTag && !(c.tags || []).includes(activeTag)) return false;
+      // Multiple tags = AND (card must carry every selected tag).
+      if (activeTags.length && !activeTags.every((t) => (c.tags || []).includes(t)))
+        return false;
       if (!q) return true;
-      return [c.full_name, c.company, c.job_title, ...(c.emails || []), ...(c.tags || [])]
+      const phoneText = (c.phones || []).flatMap((p) => [p?.label, p?.number]);
+      return [
+        c.full_name,
+        c.name_phonetic,
+        c.job_title,
+        c.department,
+        c.company,
+        c.website,
+        c.address,
+        c.notes,
+        ...(c.emails || []),
+        ...phoneText,
+        ...(c.tags || []),
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
@@ -952,14 +972,17 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
     }[sort];
 
     return [...list].sort(cmp);
-  }, [cards, query, activeTag, sort]);
+  }, [cards, query, activeTags, sort]);
 
   return (
     <>
       <header className="header">
-        <div className="wordmark">
-          <span className="seal-mark" />
-          Connex
+        <div className="brand">
+          <div className="wordmark">
+            <span className="seal-mark" />
+            Connex
+          </div>
+          <span className="ver">{APP_VERSION}</span>
         </div>
         <button className="header-action" onClick={onSignOut}>
           Sign out
@@ -971,7 +994,7 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
           <div className="search-wrap">
             <input
               className="search"
-              placeholder="Search name, company, email, tag…"
+              placeholder="Search name, company, notes, tag…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -1008,20 +1031,31 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
 
         {allTags.length > 0 && (
           <div className="tag-filter-head">
-            <span className="tag-filter-title">Tags</span>
-            <button className="link-btn" onClick={onManageTags}>
-              Edit tags
+            <button className="tag-toggle" onClick={() => setShowTags((s) => !s)}>
+              <span className="tag-filter-title">Tags</span>
+              {activeTags.length > 0 && <span className="tag-count">{activeTags.length}</span>}
+              <span className="tag-caret">{showTags ? "▲" : "▼"}</span>
             </button>
+            <div className="tag-head-actions">
+              {activeTags.length > 0 && (
+                <button className="link-btn" onClick={clearTags}>
+                  Clear
+                </button>
+              )}
+              <button className="link-btn" onClick={onManageTags}>
+                Edit tags
+              </button>
+            </div>
           </div>
         )}
 
-        {allTags.length > 0 && (
+        {allTags.length > 0 && showTags && (
           <div className="tag-filter">
             {allTags.map((t) => (
               <button
                 key={t}
-                className={"chip" + (activeTag === t ? " on" : "")}
-                onClick={() => setActiveTag(activeTag === t ? null : t)}
+                className={"chip" + (activeTags.includes(t) ? " on" : "")}
+                onClick={() => toggleTag(t)}
               >
                 {t}
               </button>
@@ -1069,7 +1103,6 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
             ))}
           </div>
         )}
-        <div className="foot">Connex {APP_VERSION}</div>
       </div>
     </>
   );
