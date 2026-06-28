@@ -276,9 +276,13 @@ input, textarea { font-family: inherit; }
   font-family: var(--font-display); font-weight: 500; font-size: 21px; margin: 0;
 }
 .back {
-  background: none; border: none; color: var(--ink);
-  font-size: 15px; font-weight: 600; padding: 6px 6px 6px 0; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 3px;
+  background: var(--surface); border: 1px solid var(--line); color: var(--ink);
+  font-size: 14px; font-weight: 700; padding: 7px 14px 7px 10px;
+  border-radius: 999px; cursor: pointer; box-shadow: var(--shadow-sm);
+  transition: transform 0.1s ease;
 }
+.back:active { transform: scale(0.96); }
 
 .shot {
   width: 100%; border-radius: var(--radius);
@@ -685,4 +689,12 @@ input, textarea { font-family: inherit; }
 /* --- dock: Import + Scan side by side -------------------------------------- */
 .dock { display: flex; gap: 10px; }
 .dock-scan { flex: 1; }
-.dock-import { flex: 0 0 auto; }
+.dock-import {
+  flex: 0 0 auto;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1.5px solid color-mix(in srgb, var(--brass) 55%, var(--line));
+  box-shadow: var(--shadow-sm);
+}
+.dock-import .dock-ico { color: var(--brass); flex: none; }
+.dock-import:active { transform: scale(0.97); }

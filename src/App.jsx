@@ -13,7 +13,7 @@ import {
 import { addToContacts, buildVCard } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:28-07:55";
+const APP_VERSION = "v2026:06:28-19:48";
 
 const BLANK = {
   full_name: "",
@@ -752,7 +752,23 @@ export default function App() {
 
       {view === "list" && (
         <div className="dock">
-          <button className="btn btn-ghost dock-import" onClick={startImport}>
+          <button className="btn dock-import" onClick={startImport}>
+            <svg
+              className="dock-ico"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 3v11" />
+              <path d="m8 11 4 4 4-4" />
+              <path d="M4 21h16" />
+            </svg>
             Import
           </button>
           <button className="btn btn-primary dock-scan" onClick={startScan}>
