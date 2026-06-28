@@ -13,7 +13,7 @@ import {
 import { addToContacts, buildVCard } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:28-19:48";
+const APP_VERSION = "v2026:06:28-20:28";
 
 const BLANK = {
   full_name: "",
@@ -327,6 +327,38 @@ function findDuplicates(cand, cards) {
     }
     return false;
   });
+}
+
+// A camera "Scan" only makes sense where the capture input opens a real
+// (rear) camera — i.e. touch devices. On a desktop the capture attribute is
+// ignored and "Scan" just opens a file dialog, identical to Import, so we hide
+// it there and show a single "Add a card" file button instead.
+const CAN_SCAN =
+  typeof navigator !== "undefined" &&
+  ((navigator.maxTouchPoints || 0) > 0 ||
+    (typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches));
+
+function ImportIcon() {
+  return (
+    <svg
+      className="dock-ico"
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3v11" />
+      <path d="m8 11 4 4 4-4" />
+      <path d="M4 21h16" />
+    </svg>
+  );
 }
 
 export default function App() {
@@ -752,29 +784,23 @@ export default function App() {
 
       {view === "list" && (
         <div className="dock">
-          <button className="btn dock-import" onClick={startImport}>
-            <svg
-              className="dock-ico"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M12 3v11" />
-              <path d="m8 11 4 4 4-4" />
-              <path d="M4 21h16" />
-            </svg>
-            Import
-          </button>
-          <button className="btn btn-primary dock-scan" onClick={startScan}>
-            <span className="seal-mark" style={{ borderColor: "#fff" }} />
-            Scan a card
-          </button>
+          {CAN_SCAN ? (
+            <>
+              <button className="btn dock-import" onClick={startImport}>
+                <ImportIcon />
+                Import
+              </button>
+              <button className="btn btn-primary dock-scan" onClick={startScan}>
+                <span className="seal-mark" style={{ borderColor: "#fff" }} />
+                Scan a card
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-primary dock-add" onClick={startImport}>
+              <ImportIcon />
+              Add a card
+            </button>
+          )}
         </div>
       )}
 
