@@ -566,11 +566,11 @@ input, textarea { font-family: inherit; }
   font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--slate-2);
 }
-.photo-actions { display: flex; gap: 8px; margin-top: 6px; }
+.photo-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .photo-act {
-  flex: 1; border: 1px solid var(--line); background: var(--surface);
-  border-radius: 11px; padding: 11px; font-size: 14px; font-weight: 600;
-  color: var(--ink); cursor: pointer;
+  flex: 1; min-width: 92px; border: 1px solid var(--line); background: var(--surface);
+  border-radius: 11px; padding: 11px 10px; font-size: 14px; font-weight: 600;
+  color: var(--ink); cursor: pointer; white-space: nowrap;
 }
 .photo-act:active { transform: scale(0.98); }
 

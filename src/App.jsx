@@ -13,7 +13,7 @@ import {
 import { addToContacts, buildVCard } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:07:30-12:45";
+const APP_VERSION = "v2026:07:30-13:02";
 
 const BLANK = {
   full_name: "",
@@ -449,6 +449,14 @@ export default function App() {
     flowRef.current = "detail-back";
     fileRef.current?.click();
   }
+  function importFrontForDetail() {
+    flowRef.current = "detail-front";
+    importRef.current?.click();
+  }
+  function importBackForDetail() {
+    flowRef.current = "detail-back";
+    importRef.current?.click();
+  }
   async function recropFront(url) {
     if (!url) return;
     try {
@@ -765,6 +773,8 @@ export default function App() {
           detailBack={detailBack}
           detailFront={detailFront}
           onRetakeFront={pickFrontForDetail}
+          onImportFront={importFrontForDetail}
+          onImportBack={importBackForDetail}
           onRemovePendingFront={() => setDetailFront(null)}
           onRecropFront={recropFront}
           onRecropBack={recropBack}
@@ -1571,6 +1581,8 @@ function DetailView({
   detailBack,
   detailFront,
   onRetakeFront,
+  onImportFront,
+  onImportBack,
   onRemovePendingFront,
   onRecropFront,
   onRecropBack,
@@ -1737,6 +1749,9 @@ function DetailView({
                   <button className="photo-act" onClick={onRetakeFront}>
                     ↻ Retake
                   </button>
+                  <button className="photo-act" onClick={onImportFront}>
+                    ↓ Import
+                  </button>
                   {frontUrl && (
                     <button className="photo-act" onClick={() => onRecropFront(frontUrl)}>
                       ✂ Re-crop
@@ -1767,6 +1782,9 @@ function DetailView({
                   <button className="photo-act" onClick={onAddBack}>
                     ↻ Retake
                   </button>
+                  <button className="photo-act" onClick={onImportBack}>
+                    ↓ Import
+                  </button>
                   {backUrl && (
                     <button className="photo-act" onClick={() => onRecropBack(backUrl)}>
                       ✂ Re-crop
@@ -1775,9 +1793,17 @@ function DetailView({
                 </div>
               </div>
             ) : (
-              <button className="add-back" onClick={onAddBack}>
-                + Add back of card
-              </button>
+              <div className="photo-row">
+                <span className="photo-row-label">Back</span>
+                <div className="photo-actions">
+                  <button className="photo-act" onClick={onAddBack}>
+                    + Add (camera)
+                  </button>
+                  <button className="photo-act" onClick={onImportBack}>
+                    ↓ Import
+                  </button>
+                </div>
+              </div>
             )}
           </div>
 
