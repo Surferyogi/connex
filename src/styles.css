@@ -699,3 +699,17 @@ input, textarea { font-family: inherit; }
 .dock-import .dock-ico { color: var(--brass); }
 .dock-ico { flex: none; }
 .dock-import:active, .dock-add:active { transform: scale(0.97); }
+
+/* --- save a card photo (front/back) as JPG or PDF ------------------------- */
+.shot-save { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+.shot-save-label {
+  font-size: 12px; font-weight: 700; color: var(--slate-2);
+  letter-spacing: 0.03em; text-transform: uppercase;
+}
+.shot-save-btn {
+  flex: none; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); border-radius: 9px; padding: 6px 12px;
+  font-size: 13px; font-weight: 700; cursor: pointer; min-width: 44px;
+}
+.shot-save-btn:active { transform: scale(0.96); }
+.shot-save-btn:disabled { opacity: 0.5; }

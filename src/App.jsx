@@ -13,7 +13,7 @@ import {
 import { addToContacts, buildVCard } from "./vcard.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:06:28-20:28";
+const APP_VERSION = "v2026:07:30-12:45";
 
 const BLANK = {
   full_name: "",
@@ -779,6 +779,7 @@ export default function App() {
             setView("list");
           }}
           onAddToContacts={handleAddToContacts}
+          flash={flash}
         />
       )}
 
@@ -1579,10 +1580,49 @@ function DetailView({
   onDelete,
   onBack,
   onAddToContacts,
+  flash,
 }) {
   const [frontUrl, setFrontUrl] = useState(null);
   const [backUrl, setBackUrl] = useState(null);
   const [lightbox, setLightbox] = useState(null);
+  const [savingPhoto, setSavingPhoto] = useState(null); // e.g. "front-pdf"
+
+  async function savePhoto(url, side, fmt) {
+    if (!url) return;
+    setSavingPhoto(`${side}-${fmt}`);
+    try {
+      const nameBase =
+        (card.full_name || card.company || "card")
+          .trim()
+          .replace(/[^\w.-]+/g, "_")
+          .replace(/_+/g, "_")
+          .replace(/^_|_$/g, "")
+          .slice(0, 40) || "card";
+      const fname = `${nameBase}-${side}`;
+      if (fmt === "jpg") {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Couldn’t load the image.");
+        await saveFile(`${fname}.jpg`, await res.blob());
+      } else {
+        const { jsPDF } = await import("jspdf");
+        const dataUrl = await urlToDataUrl(url);
+        const img = await loadImg(dataUrl);
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        const doc = new jsPDF({
+          orientation: w >= h ? "landscape" : "portrait",
+          unit: "px",
+          format: [w, h],
+        });
+        doc.addImage(dataUrl, "JPEG", 0, 0, w, h);
+        await saveFile(`${fname}.pdf`, doc.output("blob"));
+      }
+    } catch (e) {
+      flash?.(e.message || "Couldn’t save that photo.");
+    } finally {
+      setSavingPhoto(null);
+    }
+  }
   useEffect(() => {
     let on = true;
     if (card.image_path) signedUrl(card.image_path).then((u) => on && setFrontUrl(u));
@@ -1618,6 +1658,25 @@ function DetailView({
               <img className="shot" src={frontUrl} alt="Front of card" />
             </button>
             <div className="shot-cap">Front · tap to enlarge</div>
+            {!editing && (
+              <div className="shot-save">
+                <span className="shot-save-label">Save</span>
+                <button
+                  className="shot-save-btn"
+                  disabled={savingPhoto === "front-jpg"}
+                  onClick={() => savePhoto(frontUrl, "front", "jpg")}
+                >
+                  {savingPhoto === "front-jpg" ? "…" : "JPG"}
+                </button>
+                <button
+                  className="shot-save-btn"
+                  disabled={savingPhoto === "front-pdf"}
+                  onClick={() => savePhoto(frontUrl, "front", "pdf")}
+                >
+                  {savingPhoto === "front-pdf" ? "…" : "PDF"}
+                </button>
+              </div>
+            )}
           </div>
         )}
         {backUrl && (
@@ -1626,6 +1685,25 @@ function DetailView({
               <img className="shot" src={backUrl} alt="Back of card" />
             </button>
             <div className="shot-cap">Back · tap to enlarge</div>
+            {!editing && (
+              <div className="shot-save">
+                <span className="shot-save-label">Save</span>
+                <button
+                  className="shot-save-btn"
+                  disabled={savingPhoto === "back-jpg"}
+                  onClick={() => savePhoto(backUrl, "back", "jpg")}
+                >
+                  {savingPhoto === "back-jpg" ? "…" : "JPG"}
+                </button>
+                <button
+                  className="shot-save-btn"
+                  disabled={savingPhoto === "back-pdf"}
+                  onClick={() => savePhoto(backUrl, "back", "pdf")}
+                >
+                  {savingPhoto === "back-pdf" ? "…" : "PDF"}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
