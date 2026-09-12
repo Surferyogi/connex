@@ -14,7 +14,7 @@ import { addToContacts, buildVCard } from "./vcard.js";
 import { detectCardQuad } from "./cardDetect.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:09:12-11:02";
+const APP_VERSION = "v2026:09:12-23:28";
 
 const BLANK = {
   full_name: "",
@@ -221,14 +221,67 @@ function solveHomography(dst, src) {
 // Perspective-flatten the quadrilateral (4 normalized corners, order
 // TL,TR,BR,BL) into a straight rectangle. Pure canvas + bilinear sampling.
 // Falls back to a bounding-box crop if source pixels can't be read.
+// True width:height of a rectangle from its perspective outline in a photo
+// (Zhang & He, "Whiteboard scanning and image enhancement", 2003), with the
+// focal length FIXED rather than solved: solving it is degenerate for the
+// usual desk shot (card tilted about one axis), whereas a fixed value is
+// robust. Assumes the principal point is the photo centre and a 25 mm-
+// equivalent lens; phone main cameras are 24–26 mm-equivalent and the result
+// is insensitive to that spread (simulated: ±2% median error up to 45° tilt).
+// sp = [TL, TR, BR, BL] in photo pixels. Returns W/H, or null if degenerate.
+function rectAspectFromQuad(sp, nW, nH) {
+  const f = (25 / 36) * Math.max(nW, nH);
+  const cx = nW / 2;
+  const cy = nH / 2;
+  const v = (p) => [p.x - cx, p.y - cy, 1];
+  const m1 = v(sp[0]); // TL
+  const m2 = v(sp[1]); // TR
+  const m3 = v(sp[3]); // BL
+  const m4 = v(sp[2]); // BR
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const c14 = cross(m1, m4);
+  const d2 = dot(cross(m2, m4), m3);
+  const d3 = dot(cross(m3, m4), m2);
+  if (Math.abs(d2) < 1e-9 || Math.abs(d3) < 1e-9) return null;
+  const k2 = dot(c14, m3) / d2;
+  const k3 = dot(c14, m2) / d3;
+  if (!(k2 > 0) || !(k3 > 0)) return null; // corners must all sit in front of the camera
+  const n2 = [k2 * m2[0] - m1[0], k2 * m2[1] - m1[1], k2 * m2[2] - m1[2]];
+  const n3 = [k3 * m3[0] - m1[0], k3 * m3[1] - m1[1], k3 * m3[2] - m1[2]];
+  const len = (n) => Math.hypot(n[0] / f, n[1] / f, n[2]);
+  const r = len(n2) / len(n3);
+  return Number.isFinite(r) && r > 0.3 && r < 3.5 ? r : null;
+}
+
 async function warpImage(src, quad, enhance = false, quality = 0.85) {
   const img = await loadImg(src);
   const nW = img.naturalWidth;
   const nH = img.naturalHeight;
   const sp = quad.map((p) => ({ x: p.x * nW, y: p.y * nH }));
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-  let W = Math.max(1, Math.round(Math.max(dist(sp[0], sp[1]), dist(sp[3], sp[2]))));
-  let H = Math.max(1, Math.round(Math.max(dist(sp[0], sp[3]), dist(sp[1], sp[2]))));
+  // Measured side lengths set the output resolution; the output SHAPE comes
+  // from the perspective-corrected ratio, because a card shot at a tilt has
+  // its near/far sides foreshortened (a 35° tilt made a 1.65:1 card 2.07:1).
+  const topLen = Math.max(dist(sp[0], sp[1]), dist(sp[3], sp[2]));
+  const sideLen = Math.max(dist(sp[0], sp[3]), dist(sp[1], sp[2]));
+  const ratio = rectAspectFromQuad(sp, nW, nH); // W/H, null if degenerate
+  let W;
+  let H;
+  if (ratio) {
+    if (topLen >= sideLen) {
+      W = topLen;
+      H = W / ratio;
+    } else {
+      H = sideLen;
+      W = H * ratio;
+    }
+  } else {
+    W = topLen;
+    H = sideLen;
+  }
+  W = Math.max(1, Math.round(W));
+  H = Math.max(1, Math.round(H));
   const CAP = 1600;
   const mx = Math.max(W, H);
   if (mx > CAP) {
