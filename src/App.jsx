@@ -11,9 +11,10 @@ import {
   signedUrl,
 } from "./api.js";
 import { addToContacts, buildVCard } from "./vcard.js";
+import { detectCardQuad } from "./cardDetect.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:07:30-13:02";
+const APP_VERSION = "v2026:09:12-11:02";
 
 const BLANK = {
   full_name: "",
@@ -98,8 +99,10 @@ async function urlToDataUrl(url) {
 // Mild auto brightness/contrast for freshly captured photos. Luminance-based
 // levels (uniform across R/G/B so hue is preserved), with percentile clipping,
 // a capped gain to avoid amplifying noise, and a blend so it nudges rather than
-// slams. Only applied to fresh camera captures — never on re-crop (which would
-// double-apply and drift). Skips no-ops on already well-exposed shots.
+// slams. On by default for fresh captures, off by default on re-crop (the
+// crop screen has a toggle either way). Re-applying to an already-toned image
+// is close to a no-op: its black/white points sit near 0/255, so the gain is
+// ~1 and the early-exit below fires. Skips already well-exposed shots.
 function autoTone(ctx, w, h) {
   const STRENGTH = 0.85; // 0..1 blend toward the toned result
   const CLIP = 0.005; // ignore darkest/brightest 0.5% when picking black/white
@@ -844,6 +847,37 @@ function CropView({ src, title, initialRect, enhance, onDone, onCancel }) {
     ];
   });
   const [busy, setBusy] = useState(false);
+  // Auto-correction. `enhance` (prop) is true only for a fresh capture/import:
+  // that is when we auto-detect the card edges and default the tone fix ON.
+  // Re-crop of a saved photo starts with both off, but the user can turn the
+  // tone fix on (cards saved before auto-tone existed never got it).
+  const [enhanceOn, setEnhanceOn] = useState(!!enhance);
+  const [detect, setDetect] = useState(enhance ? "pending" : "idle"); // idle|pending|found|none
+  const aliveRef = useRef(true);
+
+  async function runDetect() {
+    setDetect("pending");
+    // let the screen paint the photo before the ~0.1–0.5 s of pixel work
+    await new Promise((r) => setTimeout(r, 30));
+    const q = await detectCardQuad(src);
+    if (!aliveRef.current) return;
+    if (q) {
+      setQuad(q);
+      setMode("straighten");
+      setDetect("found");
+    } else {
+      setDetect("none");
+    }
+  }
+
+  useEffect(() => {
+    aliveRef.current = true;
+    if (enhance) runDetect();
+    return () => {
+      aliveRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src, enhance]);
 
   const startCorner = (i) => (e) => {
     e.preventDefault();
@@ -914,13 +948,13 @@ function CropView({ src, title, initialRect, enhance, onDone, onCancel }) {
     setBusy(true);
     try {
       if (mode === "straighten") {
-        onDone(await warpImage(src, quad, enhance));
+        onDone(await warpImage(src, quad, enhanceOn));
       } else {
         const r = useFull ? { x1: 0, y1: 0, x2: 1, y2: 1 } : rect;
-        onDone(await cropImage(src, r, 0.85, enhance));
+        onDone(await cropImage(src, r, 0.85, enhanceOn));
       }
     } catch {
-      onDone(await cropImage(src, { x1: 0, y1: 0, x2: 1, y2: 1 }, 0.85, enhance));
+      onDone(await cropImage(src, { x1: 0, y1: 0, x2: 1, y2: 1 }, 0.85, enhanceOn));
     } finally {
       setBusy(false);
     }
@@ -957,10 +991,15 @@ function CropView({ src, title, initialRect, enhance, onDone, onCancel }) {
         </button>
       </div>
 
-      <p className="crop-note">
-        {mode === "straighten"
-          ? "Drag a dot onto each corner of the card."
-          : "Drag the corners to frame just the card."}
+      <p className={"crop-note" + (detect === "found" ? " found" : "")}>
+        {detect === "pending"
+          ? "Finding the card edges…"
+          : detect === "found" && mode === "straighten"
+            ? "Card detected — check the dots, adjust if needed."
+            : (detect === "none" ? "Couldn’t find the card edges. " : "") +
+              (mode === "straighten"
+                ? "Drag a dot onto each corner of the card."
+                : "Drag the corners to frame just the card.")}
       </p>
 
       <div
@@ -1000,6 +1039,26 @@ function CropView({ src, title, initialRect, enhance, onDone, onCancel }) {
             ))}
           </>
         )}
+      </div>
+
+      <div className="crop-tools">
+        <button
+          type="button"
+          className={"crop-toggle" + (enhanceOn ? " on" : "")}
+          aria-pressed={enhanceOn}
+          onClick={() => setEnhanceOn((v) => !v)}
+        >
+          <span className="crop-toggle-box" aria-hidden="true">{enhanceOn ? "✓" : ""}</span>
+          Auto brightness & contrast
+        </button>
+        <button
+          type="button"
+          className="crop-toggle"
+          onClick={runDetect}
+          disabled={busy || detect === "pending"}
+        >
+          {detect === "pending" ? <span className="spinner dark" /> : "⌖ Auto-detect"}
+        </button>
       </div>
 
       <div className="stack">
