@@ -178,8 +178,8 @@ input, textarea { font-family: inherit; }
   text-overflow: ellipsis;
 }
 .tile-thumb {
-  width: 52px;
-  height: 34px;
+  width: 96px;
+  height: 60px;
   border-radius: 7px;
   object-fit: cover;
   background: var(--paper);
@@ -190,8 +190,9 @@ input, textarea { font-family: inherit; }
   display: grid;
   place-items: center;
   color: var(--slate-2);
-  font-size: 16px;
+  font-size: 22px;
 }
+.tile-company { color: var(--ink); margin-top: 1px; }
 
 /* --- empty / loading ------------------------------------------------------ */
 .empty {
@@ -625,6 +626,15 @@ input, textarea { font-family: inherit; }
   background: rgba(255, 255, 255, 0.92); border: 2px solid var(--seal);
   transform: translate(-50%, -50%); touch-action: none; cursor: grab;
   box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+}
+
+/* --- offline banner -------------------------------------------------------- */
+.offline-note {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0 0 12px; padding: 10px 14px; border-radius: 10px;
+  background: color-mix(in srgb, var(--brass) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--line));
+  color: var(--ink); font-size: 13px; line-height: 1.35;
 }
 
 /* --- crop screen: auto-correction tools ----------------------------------- */

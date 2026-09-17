@@ -33,6 +33,7 @@ const MAX_ASPECT = 2.6;
 const MIN_SIDE_SUPPORT = 0.3; // each side: fraction of samples on an edge pixel
 const MIN_MEAN_SUPPORT = 0.55; // average over the four sides
 const SUPPORT_RADIUS = 2; // px tolerance when checking a sample against the edge map
+const AUTO_INSET = 0.012; // shrink the detected quad by this fraction (≈0.5 mm on a real card)
 const OVERSHOOT_LEN = 0.12; // check this fraction of a side's length past each corner
 const OVERSHOOT_PENALTY = 0.6; // score multiplier = 1 - penalty * mean overshoot support
 
@@ -302,9 +303,14 @@ function detectPass({ data, width: W, height: H }, topFraction) {
     }
   }
   if (!bestQuad) return null;
+  // Pull each corner slightly toward the centre so the warp lands just inside
+  // the printed edge — a Hough line sits on the edge transition, and leaving it
+  // there shows a sliver of desk along one or two sides.
+  const cx = bestQuad.reduce((s, p) => s + p.x, 0) / 4;
+  const cy = bestQuad.reduce((s, p) => s + p.y, 0) / 4;
   return bestQuad.map((p) => ({
-    x: Math.min(1, Math.max(0, p.x / W)),
-    y: Math.min(1, Math.max(0, p.y / H)),
+    x: Math.min(1, Math.max(0, (cx + (p.x - cx) * (1 - AUTO_INSET)) / W)),
+    y: Math.min(1, Math.max(0, (cy + (p.y - cy) * (1 - AUTO_INSET)) / H)),
   }));
 }
 
