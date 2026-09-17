@@ -9,12 +9,24 @@ import {
   deleteCard,
   uploadImage,
   signedUrl,
+  thumbUrl,
 } from "./api.js";
 import { addToContacts, buildVCard } from "./vcard.js";
 import { detectCardQuad } from "./cardDetect.js";
+import {
+  saveCardsSnapshot,
+  loadCardsSnapshot,
+  rememberUser,
+  lastUser,
+  clearOfflineData,
+  cachedImageUrl,
+  revokeImageUrl,
+  pruneImages,
+  THUMB,
+} from "./offlineCache.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:09:12-23:28";
+const APP_VERSION = "v2026:09:15-11:57";
 
 const BLANK = {
   full_name: "",
@@ -96,6 +108,168 @@ async function urlToDataUrl(url) {
   });
 }
 
+// Even out uneven lighting ("scan look"): estimate the paper brightness across
+// the card on a coarse grid (90th percentile per cell — paper, not ink), smooth
+// it, and scale every pixel so the paper reads uniformly bright. Hue is kept
+// (same gain on R, G, B). Skipped for dark-design cards (paper estimate too
+// dark) and for evenly lit shots (nothing to fix). Pure function on RGBA
+// pixels so it can be unit-tested outside the browser.
+function flattenIllumination(px, w, h) {
+  const GRID = 24; // cells across the long edge
+  const PCT = 0.9; // percentile within a cell taken as "paper"
+  const MAX_GAIN = 2.0;
+  const MIN_PAPER = 100; // median paper luminance below this => dark card, skip
+  const MIN_UNEVEN = 1.08; // brightest/darkest paper ratio below this => skip
+  const MAX_PAPER_CHROMA = 40; // max(R,G,B)-min(R,G,B) above this => coloured, not paper
+  const MIN_NEUTRAL_FRACTION = 0.15; // a cell needs this share of neutral pixels to vote
+  const MIN_SHADOW_RATIO = 0.62; // paper darker than this x brightest paper is treated as ink
+  const cw = Math.max(1, Math.ceil(Math.max(w, h) / GRID));
+  const gx = Math.ceil(w / cw);
+  const gy = Math.ceil(h / cw);
+  const map = new Float32Array(gx * gy);
+  const valid = new Uint8Array(gx * gy);
+  const hist = new Uint32Array(256);
+  for (let cy = 0; cy < gy; cy++) {
+    for (let cx = 0; cx < gx; cx++) {
+      hist.fill(0);
+      let n = 0;
+      let total = 0;
+      const y1 = Math.min(h, (cy + 1) * cw);
+      const x1 = Math.min(w, (cx + 1) * cw);
+      for (let y = cy * cw; y < y1; y++) {
+        for (let x = cx * cw; x < x1; x++) {
+          const i = (y * w + x) * 4;
+          const r = px[i];
+          const g = px[i + 1];
+          const b = px[i + 2];
+          total++;
+          // only near-neutral pixels can be paper; coloured ink/logos/bands are not
+          const mx = Math.max(r, g, b);
+          const mn = Math.min(r, g, b);
+          if (mx - mn > MAX_PAPER_CHROMA) continue;
+          hist[(r * 0.299 + g * 0.587 + b * 0.114) | 0]++;
+          n++;
+        }
+      }
+      let v = 0;
+      if (n >= total * MIN_NEUTRAL_FRACTION) {
+        let acc = 0;
+        for (v = 0; v < 256; v++) {
+          acc += hist[v];
+          if (acc >= n * PCT) break;
+        }
+        map[cy * gx + cx] = v;
+        valid[cy * gx + cx] = 1;
+      }
+    }
+  }
+  // global paper level from the cells we trust
+  const trusted = [];
+  for (let i = 0; i < map.length; i++) if (valid[i]) trusted.push(map[i]);
+  if (trusted.length < map.length * 0.3) return false; // mostly artwork — leave it
+  trusted.sort((a, b) => a - b);
+  const median = trusted[trusted.length >> 1];
+  const target = trusted[Math.floor(trusted.length * 0.95)];
+  if (median < MIN_PAPER) return false; // dark card design — leave it
+  // cells much darker than the paper are ink/logo, not shadow: distrust them too
+  for (let i = 0; i < map.length; i++) if (valid[i] && map[i] < target * MIN_SHADOW_RATIO) valid[i] = 0;
+  // fill distrusted cells from trusted neighbours (iterative inpaint)
+  for (let iter = 0; iter < gx + gy; iter++) {
+    let changed = false;
+    const next = Float32Array.from(map);
+    const nextValid = Uint8Array.from(valid);
+    for (let cy = 0; cy < gy; cy++) {
+      for (let cx = 0; cx < gx; cx++) {
+        const k = cy * gx + cx;
+        if (valid[k]) continue;
+        let s = 0;
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const yy = cy + dy;
+            const xx = cx + dx;
+            if (yy < 0 || yy >= gy || xx < 0 || xx >= gx) continue;
+            const kk = yy * gx + xx;
+            if (!valid[kk]) continue;
+            s += map[kk];
+            n++;
+          }
+        }
+        if (n) {
+          next[k] = s / n;
+          nextValid[k] = 1;
+          changed = true;
+        }
+      }
+    }
+    map.set(next);
+    valid.set(nextValid);
+    if (!changed) break;
+  }
+  // smooth the map (3x3 box, twice) so cell edges don't print through
+  for (let pass = 0; pass < 2; pass++) {
+    const out = new Float32Array(map.length);
+    for (let cy = 0; cy < gy; cy++) {
+      for (let cx = 0; cx < gx; cx++) {
+        let s = 0;
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const yy = cy + dy;
+            const xx = cx + dx;
+            if (yy < 0 || yy >= gy || xx < 0 || xx >= gx) continue;
+            s += map[yy * gx + xx];
+            n++;
+          }
+        }
+        out[cy * gx + cx] = s / n;
+      }
+    }
+    map.set(out);
+  }
+  const sorted = Float32Array.from(map).sort();
+  const lo = sorted[Math.floor(sorted.length * 0.05)];
+  if (target / Math.max(1, lo) < MIN_UNEVEN) return false; // already even
+  // per-pixel gain by bilinear interpolation of the map (cell centres)
+  for (let y = 0; y < h; y++) {
+    const fy = Math.min(gy - 1, Math.max(0, (y + 0.5) / cw - 0.5));
+    const y0 = Math.floor(fy);
+    const y1 = Math.min(gy - 1, y0 + 1);
+    const ty = fy - y0;
+    for (let x = 0; x < w; x++) {
+      const fx = Math.min(gx - 1, Math.max(0, (x + 0.5) / cw - 0.5));
+      const x0 = Math.floor(fx);
+      const x1 = Math.min(gx - 1, x0 + 1);
+      const tx = fx - x0;
+      const bg =
+        map[y0 * gx + x0] * (1 - tx) * (1 - ty) +
+        map[y0 * gx + x1] * tx * (1 - ty) +
+        map[y1 * gx + x0] * (1 - tx) * ty +
+        map[y1 * gx + x1] * tx * ty;
+      let g = target / Math.max(1, bg);
+      if (g > MAX_GAIN) g = MAX_GAIN;
+      if (g < 1) g = 1;
+      const i = (y * w + x) * 4;
+      px[i] = Math.min(255, px[i] * g);
+      px[i + 1] = Math.min(255, px[i + 1] * g);
+      px[i + 2] = Math.min(255, px[i + 2] * g);
+    }
+  }
+  return true;
+}
+
+// "Scan look" for a fresh capture: even out the lighting first, then stretch
+// the levels. flattenIllumination reads/writes pixels through the canvas.
+function enhanceScan(ctx, w, h) {
+  try {
+    const data = ctx.getImageData(0, 0, w, h);
+    if (flattenIllumination(data.data, w, h)) ctx.putImageData(data, 0, 0);
+  } catch {
+    /* tainted canvas or unavailable — fall through to levels only */
+  }
+  autoTone(ctx, w, h);
+}
+
 // Mild auto brightness/contrast for freshly captured photos. Luminance-based
 // levels (uniform across R/G/B so hue is preserved), with percentile clipping,
 // a capped gain to avoid amplifying noise, and a blend so it nudges rather than
@@ -169,7 +343,7 @@ async function cropImage(src, r, quality = 0.85, enhance = false) {
   canvas.height = sh;
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-  if (enhance) autoTone(ctx, sw, sh);
+  if (enhance) enhanceScan(ctx, sw, sh);
   const dataUrl = canvas.toDataURL("image/jpeg", quality);
   const base64 = dataUrl.split(",")[1];
   const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
@@ -349,7 +523,7 @@ async function warpImage(src, quad, enhance = false, quality = 0.85) {
     }
   }
   octx.putImageData(odata, 0, 0);
-  if (enhance) autoTone(octx, W, H);
+  if (enhance) enhanceScan(octx, W, H);
   const dataUrl = out.toDataURL("image/jpeg", quality);
   const base64 = dataUrl.split(",")[1];
   const blob = await new Promise((res) => out.toBlob(res, "image/jpeg", quality));
@@ -417,6 +591,27 @@ function ImportIcon() {
   );
 }
 
+// navigator.onLine is a hint (a captive Wi-Fi still reads "online"); the
+// data path below also falls back to the snapshot whenever a load fails.
+function useOnline() {
+  const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
+  useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    return () => {
+      window.removeEventListener("online", up);
+      window.removeEventListener("offline", down);
+    };
+  }, []);
+  return online;
+}
+
+function imagePathsOf(cards) {
+  return cards.flatMap((c) => [c.image_path, c.image_path_back]).filter(Boolean);
+}
+
 export default function App() {
   if (!isConfigured) return <ConfigWarn />;
 
@@ -425,6 +620,12 @@ export default function App() {
 
   const [cards, setCards] = useState([]);
   const [loadingCards, setLoadingCards] = useState(false);
+  // Read-only offline mode: a stand-in "session" for the last signed-in user
+  // when the phone is offline and Supabase can't confirm the login, plus the
+  // timestamp of the snapshot currently on screen (null = live data).
+  const [offlineSession, setOfflineSession] = useState(null);
+  const [snapshotAt, setSnapshotAt] = useState(null);
+  const online = useOnline();
   const [query, setQuery] = useState("");
 
   const [view, setView] = useState("list"); // list | crop | review | detail
@@ -459,37 +660,87 @@ export default function App() {
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session ?? null);
-      setAuthReady(true);
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        const s = data?.session ?? null;
+        setSession(s);
+        if (!s && (error || !navigator.onLine)) {
+          // Could not validate the login (offline / expired and unrefreshable):
+          // open the saved copy for the last user instead of the sign-in screen.
+          const uid = lastUser();
+          if (uid && loadCardsSnapshot(uid)) setOfflineSession({ user: { id: uid } });
+        }
+      })
+      .catch(() => {
+        const uid = lastUser();
+        if (uid && loadCardsSnapshot(uid)) setOfflineSession({ user: { id: uid } });
+      })
+      .finally(() => setAuthReady(true));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+      setSession(s);
+      if (s) setOfflineSession(null);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (session) refresh();
-    else setCards([]);
+    if (session) {
+      rememberUser(session.user.id);
+      refresh();
+    } else if (offlineSession) {
+      const snap = loadCardsSnapshot(offlineSession.user.id);
+      setCards(snap?.cards ?? []);
+      setSnapshotAt(snap?.savedAt ?? null);
+    } else {
+      setCards([]);
+      setSnapshotAt(null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
+  }, [session, offlineSession]);
+
+  // Keep the offline copy in step with every change made while signed in.
+  useEffect(() => {
+    if (session && !snapshotAt) saveCardsSnapshot(session.user.id, cards);
+  }, [cards, session, snapshotAt]);
 
   async function refresh() {
     setLoadingCards(true);
     try {
-      setCards(await listCards());
+      const list = await listCards();
+      setSnapshotAt(null);
+      setCards(list);
+      saveCardsSnapshot(session.user.id, list);
+      pruneImages(imagePathsOf(list));
     } catch (e) {
-      flash("Couldn’t load your cards.");
+      const snap = loadCardsSnapshot(session?.user?.id);
+      if (snap) {
+        setCards(snap.cards);
+        setSnapshotAt(snap.savedAt);
+        flash("Couldn’t reach the server — showing your saved copy.");
+      } else {
+        flash("Couldn’t load your cards.");
+      }
     } finally {
       setLoadingCards(false);
     }
   }
 
+  const readOnly = !!offlineSession || !!snapshotAt;
+  function requireOnline() {
+    if (online && !readOnly) return true;
+    flash("You’re offline — scanning and importing need a connection.");
+    return false;
+  }
+
   // --- capture + crop + scan ------------------------------------------------
   function startScan() {
+    if (!requireOnline()) return;
     flowRef.current = "front";
     fileRef.current?.click();
   }
   function startImport() {
+    if (!requireOnline()) return;
     flowRef.current = "front";
     importRef.current?.click();
   }
@@ -743,7 +994,7 @@ export default function App() {
 
   // --- render ---------------------------------------------------------------
   if (!authReady) return <CenterLoad />;
-  if (!session) return <AuthView flash={flash} />;
+  if (!session && !offlineSession) return <AuthView flash={flash} />;
 
   return (
     <div className="app">
@@ -772,7 +1023,33 @@ export default function App() {
           allTags={allTags}
           onManageTags={() => setView("tags")}
           onOpen={openDetail}
-          onSignOut={() => supabase.auth.signOut()}
+          onSignOut={async () => {
+            if (readOnly || !online) {
+              flash("You’re offline — sign out once you’re back online.");
+              return;
+            }
+            await clearOfflineData(session?.user?.id);
+            supabase.auth.signOut();
+          }}
+          offlineNote={
+            offlineSession || !online
+              ? `Offline — showing saved copy${snapshotAt ? " from " + new Date(snapshotAt).toLocaleString() : ""}`
+              : snapshotAt
+                ? `Server unreachable — showing saved copy from ${new Date(snapshotAt).toLocaleString()}`
+                : null
+          }
+          onRetry={
+            session
+              ? refresh
+              : async () => {
+                  // back online with a stand-in session: re-validate the login
+                  const { data } = await supabase.auth.getSession().catch(() => ({ data: null }));
+                  if (data?.session) {
+                    setOfflineSession(null);
+                    setSession(data.session);
+                  } else flash("Still can’t reach the server.");
+                }
+          }
           flash={flash}
         />
       )}
@@ -1207,7 +1484,7 @@ async function saveFile(filename, blob) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
-function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOpen, onSignOut, flash }) {
+function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOpen, onSignOut, flash, offlineNote, onRetry }) {
   const [activeTags, setActiveTags] = useState([]);
   const [showTags, setShowTags] = useState(false);
   const [sort, setSort] = useState("date_desc");
@@ -1342,6 +1619,16 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
       </header>
 
       <div className="content">
+        {offlineNote && (
+          <div className="offline-note" role="status">
+            <span>{offlineNote}</span>
+            {onRetry && (
+              <button className="link-btn" onClick={onRetry}>
+                Retry
+              </button>
+            )}
+          </div>
+        )}
         {cards.length > 0 && (
           <div className="list-top">
             <div className="list-count">
@@ -1451,9 +1738,9 @@ function ListView({ cards, loading, query, setQuery, allTags, onManageTags, onOp
                 <Thumb card={c} />
                 <div className="tile-body">
                   <div className="tile-name">{c.full_name || "Unnamed contact"}</div>
-                  <div className="tile-sub">
-                    {[c.job_title, c.company].filter(Boolean).join(" · ") || "—"}
-                  </div>
+                  {c.job_title && <div className="tile-sub">{c.job_title}</div>}
+                  {c.company && <div className="tile-sub tile-company">{c.company}</div>}
+                  {!c.job_title && !c.company && <div className="tile-sub">—</div>}
                   {(c.tags || []).length > 0 && (
                     <div className="tile-tags">
                       {c.tags.map((t) => (
@@ -1584,18 +1871,56 @@ function TagRow({ name, onRename, onDelete }) {
   );
 }
 
+// List tile photo. Loads only once the tile scrolls near the screen, and asks
+// Storage for a ~320 px thumbnail (10–20 KB) instead of the 1600 px photo.
+// If the thumbnail can't be produced (transformations off), it falls back to
+// the full photo exactly as before. Both variants are cached on the phone.
 function Thumb({ card }) {
   const [url, setUrl] = useState(null);
+  const [near, setNear] = useState(false);
+  const ref = useRef(null);
   useEffect(() => {
+    const el = ref.current;
+    if (!el || near) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setNear(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setNear(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "400px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [near]);
+  useEffect(() => {
+    if (!near || !card.image_path) return;
     let on = true;
-    if (card.image_path) signedUrl(card.image_path).then((u) => on && setUrl(u));
+    let made = null;
+    (async () => {
+      let u = await cachedImageUrl(card.image_path, thumbUrl, THUMB, true);
+      if (!u) u = await cachedImageUrl(card.image_path, signedUrl);
+      made = u;
+      if (on) setUrl(u);
+      else revokeImageUrl(u);
+    })();
     return () => {
       on = false;
+      revokeImageUrl(made);
     };
-  }, [card.image_path]);
-  if (url) return <img className="tile-thumb" src={url} alt="" />;
+  }, [near, card.image_path]);
+  if (url) return <img ref={ref} className="tile-thumb" src={url} alt="" />;
   const initial = (card.full_name || "·").trim().charAt(0).toUpperCase();
-  return <div className="tile-thumb placeholder">{initial}</div>;
+  return (
+    <div ref={ref} className="tile-thumb placeholder">
+      {initial}
+    </div>
+  );
 }
 
 /* ------------------------------ Review ------------------------------------ */
@@ -1749,10 +2074,24 @@ function DetailView({
   }
   useEffect(() => {
     let on = true;
-    if (card.image_path) signedUrl(card.image_path).then((u) => on && setFrontUrl(u));
-    if (card.image_path_back) signedUrl(card.image_path_back).then((u) => on && setBackUrl(u));
+    let madeF = null;
+    let madeB = null;
+    if (card.image_path)
+      cachedImageUrl(card.image_path, signedUrl).then((u) => {
+        madeF = u;
+        if (on) setFrontUrl(u);
+        else revokeImageUrl(u);
+      });
+    if (card.image_path_back)
+      cachedImageUrl(card.image_path_back, signedUrl).then((u) => {
+        madeB = u;
+        if (on) setBackUrl(u);
+        else revokeImageUrl(u);
+      });
     return () => {
       on = false;
+      revokeImageUrl(madeF);
+      revokeImageUrl(madeB);
     };
   }, [card.image_path, card.image_path_back]);
 
