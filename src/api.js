@@ -124,6 +124,26 @@ export async function uploadImage(userId, blob) {
   return path;
 }
 
+// Small server-resized variant for list tiles (Supabase Storage image
+// transformations — Pro plan, must be enabled under Storage → Settings).
+// 96×60 CSS px at 3× = 288×180 device px; 320 wide "contain" keeps the card's
+// own aspect. Returns null if the transform can't be signed (feature off),
+// so callers can fall back to the full image.
+export async function thumbUrl(path, expiresIn = 3600) {
+  if (!path) return null;
+  try {
+    const { data, error } = await supabase.storage
+      .from("card-images")
+      .createSignedUrl(path, expiresIn, {
+        transform: { width: 320, height: 200, resize: "contain", quality: 70 },
+      });
+    if (error) return null;
+    return data?.signedUrl ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function signedUrl(path, expiresIn = 3600) {
   if (!path) return null;
   const { data, error } = await supabase.storage
