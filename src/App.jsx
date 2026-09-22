@@ -26,7 +26,7 @@ import {
 } from "./offlineCache.js";
 
 // Bump this on every edit to App.jsx — format vYYYY:MM:DD-HH:MM (Asia/Tokyo).
-const APP_VERSION = "v2026:09:15-11:57";
+const APP_VERSION = "v2026:09:23-06:08";
 
 const BLANK = {
   full_name: "",
@@ -650,7 +650,9 @@ export default function App() {
   const allTags = useMemo(() => {
     const s = new Set();
     cards.forEach((c) => (c.tags || []).forEach((t) => s.add(t)));
-    return [...s].sort((a, b) => a.localeCompare(b));
+    // Alphanumeric: "Tag2" before "Tag10", and case is ignored so "tw" sorts
+    // with "TW" rather than after every capitalised tag.
+    return [...s].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
   }, [cards]);
 
   function flash(msg, ms = 3600) {
@@ -2505,7 +2507,7 @@ function TagEditor({ tags, setTags, suggestions }) {
       />
       {sugg.length > 0 && (
         <div className="chips suggest">
-          {sugg.slice(0, 12).map((s) => (
+          {sugg.map((s) => (
             <button className="chip" key={s} onClick={() => add(s)}>
               + {s}
             </button>
